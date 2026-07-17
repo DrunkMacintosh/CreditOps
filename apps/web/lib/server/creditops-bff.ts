@@ -1,5 +1,7 @@
 // The future identity callback must issue this with HttpOnly, Secure,
 // SameSite=Strict, Path=/, and no Domain. This BFF never issues the token cookie.
+import { getCloudRunServerlessAuthorization } from "./cloud-run-auth";
+
 export const SESSION_COOKIE_NAME = "__Host-creditops-workforce";
 export const CSRF_COOKIE_NAME = "__Host-creditops-csrf";
 export const CSRF_HEADER_NAME = "x-creditops-csrf";
@@ -33,6 +35,7 @@ const ACCEPTED_UPLOAD_TYPES = new Map([
 interface ProxyDependencies {
   fetcher?: typeof fetch;
   upstreamBaseUrl?: string;
+  serverlessAuthorization?: (request: Request) => Promise<string>;
 }
 
 export async function proxyCreditOpsRequest(
@@ -88,6 +91,14 @@ export async function proxyCreditOpsRequest(
     return jsonError(503, "UPSTREAM_NOT_CONFIGURED");
   }
 
+  let serverlessToken: string;
+  try {
+    serverlessToken = await (dependencies.serverlessAuthorization ?? ((incoming) =>
+      getCloudRunServerlessAuthorization(incoming, { audience: upstreamBase.origin })))(request);
+  } catch {
+    return jsonError(503, "CLOUD_RUN_AUTH_NOT_CONFIGURED");
+  }
+
   let body: string | undefined;
   if (hasBody) {
     if (declaredBodyTooLarge(request.headers, MAX_REQUEST_BYTES)) {
@@ -116,6 +127,7 @@ export async function proxyCreditOpsRequest(
   const upstreamHeaders = new Headers({
     accept: "application/json",
     authorization: `Bearer ${token}`,
+    "x-serverless-authorization": `Bearer ${serverlessToken}`,
   });
   if (hasBody) upstreamHeaders.set("content-type", "application/json");
   if (idempotencyKey && validOpaqueHeader(idempotencyKey)) {

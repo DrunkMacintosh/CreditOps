@@ -5,10 +5,21 @@ import {
   CSRF_COOKIE_NAME,
   CSRF_HEADER_NAME,
   SESSION_COOKIE_NAME,
-  proxyCreditOpsRequest,
+  proxyCreditOpsRequest as proxyCreditOpsRequestImpl,
 } from "../../lib/server/creditops-bff";
 
 const upstreamBaseUrl = "https://creditops-api.invalid";
+
+function proxyCreditOpsRequest(
+  request: Request,
+  pathSegments: string[],
+  dependencies: Parameters<typeof proxyCreditOpsRequestImpl>[2] = {},
+) {
+  return proxyCreditOpsRequestImpl(request, pathSegments, {
+    serverlessAuthorization: async () => "test-cloud-run-id-token",
+    ...dependencies,
+  });
+}
 
 function request(
   path: string,
@@ -24,6 +35,18 @@ function request(
 }
 
 describe("CreditOps JSON BFF", () => {
+  it("fails closed when Cloud Run IAM authorization is not configured", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequestImpl(
+      request("/api/v1/cases"),
+      ["api", "v1", "cases"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(503);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("reads request and response bodies through bounded streams without whole-body helpers", async () => {
     const upstream = new Response(JSON.stringify({ id: "case-1" }), {
       status: 201,
@@ -141,6 +164,9 @@ describe("CreditOps JSON BFF", () => {
     expect(url).toBe("https://creditops-api.invalid/api/v1/cases");
     expect(new Headers(init.headers).get("authorization")).toBe(
       "Bearer workforce-token",
+    );
+    expect(new Headers(init.headers).get("x-serverless-authorization")).toBe(
+      "Bearer test-cloud-run-id-token",
     );
     expect(new Headers(init.headers).has("cookie")).toBe(false);
     expect(response.headers.get("x-request-id")).toBe("request-1");
