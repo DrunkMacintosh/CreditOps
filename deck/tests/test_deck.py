@@ -108,3 +108,30 @@ def test_architecture_bands(prs):
     slide = list(prs.slides)[9]
     assert names(slide).count("band") == 4
     assert "Qwen3-30B-A3B" in slide_text(slide)
+
+
+def get_table(slide, name):
+    for shape in slide.shapes:
+        if shape.name == name and shape.has_table:
+            return shape.table
+    return None
+
+
+def test_compare_table(prs):
+    table = get_table(list(prs.slides)[10], "compare_table")
+    assert table is not None
+    assert len(table.rows) == 8 and len(table.columns) == 5
+    assert table.cell(0, 4).text == "SHB CreditOps EvidenceGraph"
+
+
+def test_criteria_table(prs):
+    table = get_table(list(prs.slides)[11], "criteria_table")
+    assert table is not None and len(table.rows) == 7
+    assert "GenAI" in slide_text(list(prs.slides)[11])
+
+
+def test_validation_metrics(prs):
+    slide = list(prs.slides)[12]
+    table = get_table(slide, "metric_table")
+    assert table is not None and len(table.rows) == 7
+    assert "[X%]" in slide_text(slide)

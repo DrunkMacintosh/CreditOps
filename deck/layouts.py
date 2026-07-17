@@ -196,6 +196,72 @@ def render_architecture(prs, spec):
     return slide
 
 
+def _style_table(frame, header_fill, body_size):
+    table = frame.table
+    for r, row in enumerate(table.rows):
+        for cell in row.cells:
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = header_fill if r == 0 else theme.WHITE
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs or [para.add_run()]:
+                    run.font.name = theme.FONT
+                    run.font.size = body_size
+                    run.font.bold = r == 0
+                    run.font.color.rgb = (theme.WHITE if r == 0
+                                          else theme.DARK_TEXT)
+
+
+def _add_table(slide, name, header, rows, x, y, w, h, body_size=None):
+    frame = slide.shapes.add_table(len(rows) + 1, len(header), x, y, w, h)
+    frame.name = name
+    table = frame.table
+    for c, text in enumerate(header):
+        table.cell(0, c).text = text
+    for r, row in enumerate(rows, start=1):
+        for c, text in enumerate(row):
+            table.cell(r, c).text = text
+    _style_table(frame, theme.DEEP_BLUE, body_size or theme.SMALL_SIZE)
+    return frame
+
+
+def render_compare_table(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    _add_table(slide, "compare_table", x["cols"], x["rows"],
+               Inches(0.5), Inches(1.4), Inches(12.3), Inches(4.9))
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_criteria(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    _add_table(slide, "criteria_table",
+               ["Đề bài yêu cầu", "Chúng tôi có trong demo"], x["rows"],
+               Inches(0.5), Inches(1.35), Inches(12.3), Inches(3.9))
+    for i, benefit in enumerate(x["benefits"]):
+        builders.box(slide, Inches(0.5) + i * Inches(3.15), Inches(5.6),
+                     Inches(3.0), Inches(1.0), benefit, theme.ORANGE,
+                     name="benefit")
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_validation(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    builders.add_bullets(slide, spec["bullets"], Inches(0.5), Inches(1.3),
+                         Inches(12.3), Inches(1.1), size=theme.SMALL_SIZE)
+    _add_table(slide, "metric_table",
+               ["Chỉ số", "Kết quả", "Ghi chú"], spec["extra"]["metrics"],
+               Inches(0.5), Inches(2.5), Inches(12.3), Inches(3.4))
+    builders.add_killer(slide, spec["killer"])
+    builders.add_footer(slide, spec)
+    return slide
+
+
 RENDERERS = {name: render_standard for name in content.LAYOUTS}
 RENDERERS.update({
     "hook": render_hook,
@@ -209,4 +275,9 @@ RENDERERS.update({
     "provenance": render_provenance,
     "grounding": render_grounding,
     "architecture": render_architecture,
+})
+RENDERERS.update({
+    "compare_table": render_compare_table,
+    "criteria": render_criteria,
+    "validation": render_validation,
 })
