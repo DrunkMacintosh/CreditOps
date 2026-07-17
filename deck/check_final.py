@@ -6,7 +6,11 @@ disclaimer (VN + EN) is present on every flagged slide; no forbidden claim
 phrase appears in slide text or speaker notes.
 Exit 0 = ready; exit 1 = problems (listed); exit 2 = file unreadable.
 """
+import os
 import sys
+
+# Allow running both as `python -m deck.check_final` and `python deck/check_final.py`.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pptx import Presentation
 from pptx.exc import PackageNotFoundError
