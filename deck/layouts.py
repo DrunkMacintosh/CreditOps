@@ -1,5 +1,6 @@
 """Layout renderers. This task: everything renders as 'standard'.
 Later tasks replace entries in RENDERERS with specialized functions."""
+from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches
 
 from deck import builders, content, theme
@@ -98,10 +99,114 @@ def render_storyboard(prs, spec):
     return slide
 
 
+def render_curve(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    heights = [Inches(1.0), Inches(1.6), Inches(2.2)]
+    xs = [Inches(0.8), Inches(4.0), Inches(9.6)]
+    ys = [Inches(4.6), Inches(4.0), Inches(3.4)]
+    for i, stage in enumerate(x["stages"]):
+        builders.box(slide, xs[i], ys[i], Inches(2.9), heights[i],
+                     stage, theme.DEEP_BLUE, name="stage_box", bold=True)
+    builders.box(slide, Inches(7.1), Inches(3.9), Inches(2.3), Inches(1.2),
+                 x["gap"], theme.RED, name="gap_box", bold=True)
+    builders.add_bullets(slide, spec["bullets"], Inches(0.8), Inches(1.4),
+                         Inches(11.9), Inches(1.7), size=theme.SMALL_SIZE)
+    builders.add_killer(slide, spec["killer"])
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_pipeline(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    for i, step in enumerate(spec["extra"]["steps"]):
+        row, col = divmod(i, 4)
+        builders.box(slide,
+                     Inches(0.5) + col * Inches(3.15),
+                     Inches(1.9) + row * Inches(1.9),
+                     Inches(3.0), Inches(1.5),
+                     step, theme.DEEP_BLUE if row == 0 else theme.ORANGE,
+                     name="chevron", shape_type=MSO_SHAPE.CHEVRON)
+    builders.add_killer(slide, spec["killer"])
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_provenance(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    for i, item in enumerate(x["chain"]):
+        builders.box(slide, Inches(0.6), Inches(1.35) + i * Inches(0.72),
+                     Inches(5.6), Inches(0.6), item, theme.DEEP_BLUE,
+                     name="chain_box")
+    builders.tb(slide, Inches(6.7), Inches(1.35), Inches(6.1), Inches(0.4),
+                "Cấu trúc một bản ghi khoảng trống:", size=theme.SMALL_SIZE,
+                color=theme.DEEP_BLUE, bold=True)
+    builders.add_bullets(slide, x["gap_panel"], Inches(6.7), Inches(1.8),
+                         Inches(6.1), Inches(3.2), size=theme.SMALL_SIZE)
+    builders.add_placeholder(slide, Inches(6.7), Inches(5.1), Inches(6.1),
+                             Inches(1.3), x["screenshot"])
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_grounding(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    for i, src in enumerate(x["sources"]):
+        row, col = divmod(i, 2)
+        builders.box(slide,
+                     Inches(0.6) + col * Inches(3.0),
+                     Inches(1.6) + row * Inches(1.15),
+                     Inches(2.85), Inches(1.0),
+                     src, theme.DEEP_BLUE, name="source_box")
+    builders.box(slide, Inches(7.0), Inches(2.4), Inches(2.6), Inches(1.6),
+                 x["layer"], theme.ORANGE, name="layer_box", bold=True)
+    builders.box(slide, Inches(10.1), Inches(2.0), Inches(2.7), Inches(1.0),
+                 x["out"], theme.GREEN, name="out_box")
+    builders.box(slide, Inches(10.1), Inches(3.4), Inches(2.7), Inches(1.2),
+                 x["abstain"], theme.RED, name="abstain_box")
+    builders.add_bullets(slide, spec["bullets"], Inches(0.6), Inches(5.2),
+                         Inches(12.1), Inches(0.9), size=theme.SMALL_SIZE)
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_architecture(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    for i, band in enumerate(x["bands"]):
+        builders.box(slide, Inches(0.6), Inches(1.4) + i * Inches(1.0),
+                     Inches(8.6), Inches(0.85), band, theme.DEEP_BLUE,
+                     name="band")
+    builders.tb(slide, Inches(9.5), Inches(1.4), Inches(3.3), Inches(0.4),
+                "Ranh giới tin cậy:", size=theme.SMALL_SIZE,
+                color=theme.DEEP_BLUE, bold=True)
+    builders.add_bullets(slide, x["trust"], Inches(9.5), Inches(1.85),
+                         Inches(3.3), Inches(2.6), size=theme.SMALL_SIZE)
+    builders.tb(slide, Inches(0.6), Inches(5.5), Inches(12.1), Inches(0.4),
+                x["note"], size=theme.SMALL_SIZE, color=theme.GRAY)
+    builders.add_killer(slide, spec["killer"])
+    builders.add_footer(slide, spec)
+    return slide
+
+
 RENDERERS = {name: render_standard for name in content.LAYOUTS}
 RENDERERS.update({
     "hook": render_hook,
     "product": render_product,
     "before_after": render_before_after,
     "storyboard": render_storyboard,
+})
+RENDERERS.update({
+    "curve": render_curve,
+    "pipeline": render_pipeline,
+    "provenance": render_provenance,
+    "grounding": render_grounding,
+    "architecture": render_architecture,
 })

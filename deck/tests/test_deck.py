@@ -77,3 +77,34 @@ def test_storyboard_six_cards(prs):
     slide = list(prs.slides)[5]
     assert names(slide).count("story_card") == 6
     assert "screenshot_placeholder" in names(slide)
+
+
+def test_curve_slide(prs):
+    slide = list(prs.slides)[2]
+    ns = names(slide)
+    assert ns.count("stage_box") == 3 and "gap_box" in ns
+
+
+def test_pipeline_eight_chevrons(prs):
+    slide = list(prs.slides)[6]
+    assert names(slide).count("chevron") == 8
+
+
+def test_provenance_chain(prs):
+    slide = list(prs.slides)[7]
+    ns = names(slide)
+    assert ns.count("chain_box") == 7
+    assert "screenshot_placeholder" in ns
+
+
+def test_grounding_flow(prs):
+    slide = list(prs.slides)[8]
+    ns = names(slide)
+    assert ns.count("source_box") == 6
+    assert "layer_box" in ns and "abstain_box" in ns
+
+
+def test_architecture_bands(prs):
+    slide = list(prs.slides)[9]
+    assert names(slide).count("band") == 4
+    assert "Qwen3-30B-A3B" in slide_text(slide)
