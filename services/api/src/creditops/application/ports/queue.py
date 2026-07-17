@@ -107,6 +107,14 @@ class TaskRepository(Protocol):
 
     async def release_worker_slot(self, *, lease_owner: UUID, lease_token: UUID) -> None: ...
 
+    async def extend_worker_slot(
+        self,
+        *,
+        lease_owner: UUID,
+        lease_token: UUID,
+        lease_until: datetime,
+    ) -> bool: ...
+
     async def claim(
         self,
         *,

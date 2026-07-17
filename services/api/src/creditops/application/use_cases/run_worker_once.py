@@ -137,6 +137,25 @@ class RunWorkerOnce:
                 )
 
             claimed_task = task
+            async def heartbeat() -> None:
+                # Test doubles may inherit the Protocol (whose method body is
+                # only an ellipsis); call the heartbeat only when the concrete
+                # adapter implements it.
+                extend_slot = type(self._tasks).__dict__.get("extend_worker_slot")
+                if callable(extend_slot):
+                    renewed = await extend_slot(
+                        lease_owner=self._worker_id,
+                        lease_token=lease_token,
+                        lease_until=self._clock() + timedelta(seconds=self._slot_lease_seconds),
+                    )
+                    if not renewed:
+                        raise TaskLeaseLost("worker slot lease is no longer owned")
+                await self._queue.extend_visibility(
+                    message.message_id,
+                    visibility_timeout_seconds=self._visibility_timeout_seconds,
+                )
+
+            await heartbeat()
             latest = await self._tasks.latest_checkpoint(
                 task_id=claimed_task.id,
                 case_id=claimed_task.case_id,
@@ -163,6 +182,7 @@ class RunWorkerOnce:
                     checkpoint_schema_version="1",
                     checkpoint_data=checkpoint_data,
                 )
+                await heartbeat()
                 return latest
 
             result = await self._processor.process(claimed_task, latest, save_checkpoint)
