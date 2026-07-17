@@ -115,7 +115,7 @@ def add_footer(slide, spec, dark=False):
         text += f"\n{theme.DISCLAIMER_VN}  ({theme.DISCLAIMER_EN})"
     tb(slide, Inches(0.5), Inches(6.95), Inches(12.3), Inches(0.5),
        text, size=theme.FOOTER_SIZE,
-       color=theme.ICE_TEXT if dark else theme.GRAY, name="footer")
+       color=theme.ICE_TEXT if dark else theme.SLATE, name="footer")
 
 
 def add_placeholder(slide, x, y, w, h, label):

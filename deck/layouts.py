@@ -77,8 +77,7 @@ def render_before_after(prs, spec):
     builders.add_bullets(slide, x["before"], Inches(0.6), Inches(2.0),
                          Inches(6.0), Inches(3.2), size=theme.SMALL_SIZE)
     builders.add_bullets(slide, x["after"], Inches(6.85), Inches(2.0),
-                         Inches(6.0), Inches(3.2), size=theme.SMALL_SIZE,
-                         color=theme.DARK_TEXT)
+                         Inches(6.0), Inches(3.2), size=theme.SMALL_SIZE)
     builders.box(slide, Inches(0.6), Inches(5.35), Inches(6.0), Inches(0.5),
                  x["before_bar"], theme.RED, name="time_bar", bold=True)
     builders.box(slide, Inches(6.85), Inches(5.35), Inches(2.4), Inches(0.5),

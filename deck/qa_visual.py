@@ -26,6 +26,8 @@ TOLERANCE = 1.06    # allow 6% slack before flagging
 
 
 def font_for(size_pt, bold, italic):
+    # Cache key rounds to whole points; sub-point size differences are far
+    # inside the 6% TOLERANCE, so the approximation cannot flip a verdict.
     key = (round(size_pt), bold, italic)
     if key not in FONTS:
         FONTS[key] = ImageFont.truetype(FONT_FILES[(bold, italic)], round(size_pt))
@@ -93,6 +95,7 @@ def check_table(idx, sh, problems):
                 continue
             para = cell.text_frame.paragraphs[0]
             size_pt, bold, italic = para_style(para)
+            # +7pt approximates the default top+bottom cell insets (0.05in each).
             need = wrap_height_pt(text, col_w_pt, size_pt, bold, italic, None, 0) + 7
             if need > row_budget_pt * TOLERANCE:
                 problems.append(
@@ -114,7 +117,8 @@ def check_overlaps(idx, shapes, problems):
         # 'panel' is a background container by design; 'title' boxes are
         # taller than most rendered titles and their fit is verified by the
         # overflow check, so AABB collisions with them are false alarms.
-        if sh.left is None or sh.name in ("panel", "footer", "title"):
+        # Footers participate in overlap checks like any other shape.
+        if sh.left is None or sh.name in ("panel", "title"):
             continue
         rects.append((sh.name, (sh.left, sh.top, sh.left + sh.width,
                                 sh.top + sh.height)))
