@@ -125,9 +125,10 @@ class RunWorkerOnce:
                 lease_until=self._clock() + timedelta(seconds=self._slot_lease_seconds),
             )
             if task is None:
-                # A task that is already terminal or replaced is explicitly
-                # terminal.  It is safe to archive this delivery.
-                await self._queue.archive(message.message_id)
+                # A missing claim is not proof of durable terminal success:
+                # it can also be a stale-version race or another worker's
+                # lease.  Keep the delivery recoverable; only the explicit
+                # success/SUPERSEDED branches below may archive it.
                 return WorkerRunResult(
                     WorkerOutcome.STALE,
                     task_id=envelope.task_id,
