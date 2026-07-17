@@ -1,0 +1,244 @@
+name: Deploy synthetic development
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: creditops-deploy-main
+  cancel-in-progress: false
+
+env:
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GAR_LOCATION: ${{ vars.GAR_LOCATION }}
+  GAR_REPOSITORY: ${{ vars.GAR_REPOSITORY }}
+  CLOUD_RUN_API_SERVICE: ${{ vars.CLOUD_RUN_API_SERVICE }}
+  CLOUD_RUN_WORKER_JOB: ${{ vars.CLOUD_RUN_WORKER_JOB }}
+  SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+  VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+  VERCEL_CLI_VERSION: ${{ vars.VERCEL_CLI_VERSION }}
+
+jobs:
+  supabase:
+    name: Apply Supabase migrations
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    steps:
+      - name: Check out deployed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.54.11
+
+      - name: Link the approved project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: >-
+          supabase link
+          --project-ref "$SUPABASE_PROJECT_REF"
+          --password "$SUPABASE_DB_PASSWORD"
+
+      - name: Apply ordered migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: supabase db push --linked --yes
+
+  cloud-run:
+    name: Build and deploy Cloud Run
+    needs: supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Check out deployed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Authenticate to Google Cloud with OIDC
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: latest
+
+      - name: Authenticate Docker to Artifact Registry
+        run: gcloud auth configure-docker "${GAR_LOCATION}-docker.pkg.dev" --quiet
+
+      - name: Set image coordinates
+        id: image
+        env:
+          DEPLOY_SHA: ${{ env.DEPLOY_SHA }}
+        run: |
+          set -euo pipefail
+          image="${GAR_LOCATION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GAR_REPOSITORY}/creditops-api:${DEPLOY_SHA}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push immutable commit image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/api/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+          provenance: true
+          sbom: true
+
+      - name: Resolve pushed image digest
+        id: digest
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          digest="$(gcloud artifacts docker images describe "$IMAGE" \
+            --project="$GCP_PROJECT_ID" \
+            --format='value(image_summary.digest)')"
+          case "$digest" in
+            sha256:*) printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Artifact Registry returned an invalid digest" >&2; exit 1 ;;
+          esac
+
+      - name: Build immutable image reference
+        id: immutable-image
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          immutable="$(.github/workflows/scripts/verify-image-reference.sh "$IMAGE" "$DIGEST")"
+          printf 'image=%s\n' "$immutable" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy API service without public access
+        env:
+          IMAGE: ${{ steps.immutable-image.outputs.image }}
+        run: >-
+          gcloud run deploy "$CLOUD_RUN_API_SERVICE"
+          --project="$GCP_PROJECT_ID"
+          --region="$GCP_REGION"
+          --image="$IMAGE"
+          --no-allow-unauthenticated
+          --quiet
+
+      - name: Update worker job only when the runtime gate is enabled
+        if: vars.WORKER_RUNTIME_READY == 'true'
+        env:
+          IMAGE: ${{ steps.immutable-image.outputs.image }}
+        run: >-
+          gcloud run jobs update "$CLOUD_RUN_WORKER_JOB"
+          --project="$GCP_PROJECT_ID"
+          --region="$GCP_REGION"
+          --image="$IMAGE"
+          --args=worker
+          --tasks=1
+          --parallelism=1
+          --max-retries=0
+          --quiet
+
+      - name: Confirm worker remains fail-closed
+        if: vars.WORKER_RUNTIME_READY != 'true'
+        run: echo "WORKER_RUNTIME_READY is false; worker job was not changed."
+
+  vercel:
+    name: Deploy Vercel frontend
+    needs: cloud-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    steps:
+      - name: Check out deployed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.0
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install pinned Vercel CLI
+        env:
+          VERCEL_CLI_VERSION: ${{ env.VERCEL_CLI_VERSION }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_CLI_VERSION"
+          npm install --global "vercel@${VERCEL_CLI_VERSION}"
+
+      - name: Bind the exact Vercel project for this deploy
+        working-directory: apps/web
+        env:
+          VERCEL_ORG_ID: ${{ env.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ env.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_ORG_ID"
+          test -n "$VERCEL_PROJECT_ID"
+          mkdir -p .vercel
+          printf '{"orgId":"%s","projectId":"%s"}\n' \
+            "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" > .vercel/project.json
+
+      - name: Pull Vercel environment
+        working-directory: apps/web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+
+      - name: Build Vercel output
+        working-directory: apps/web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+
+      - name: Deploy prebuilt Vercel output
+        working-directory: apps/web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+
+      - name: Smoke check Vercel production URL
+        if: vars.VERCEL_PRODUCTION_URL != ''
+        env:
+          VERCEL_PRODUCTION_URL: ${{ vars.VERCEL_PRODUCTION_URL }}
+        run: curl --fail --silent --show-error --location --max-time 20 "$VERCEL_PRODUCTION_URL" >/dev/null
