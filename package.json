@@ -1,0 +1,14 @@
+{
+  "name": "shb-creditops-evidencegraph",
+  "private": true,
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=11 <12"
+  },
+  "scripts": {
+    "build": "pnpm --dir apps/web build",
+    "lint": "pnpm --dir apps/web lint",
+    "test": "pnpm --dir apps/web test -- --run"
+  }
+}

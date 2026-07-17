@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shb-creditops-evidencegraph"
+version = "0.1.0"
+description = "Safety-first walking skeleton for SHB CreditOps EvidenceGraph"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.132,<0.133",
+    "httpx>=0.28,<1",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.10,<3",
+    "psycopg[binary]>=3.2,<4",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn[standard]>=0.35,<1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.17,<2",
+    "pytest>=8.4,<9",
+    "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["services/api/src/creditops"]
+
+[tool.pytest.ini_options]
+testpaths = ["services/api/tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["services/api/src"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["services/api/src"]
