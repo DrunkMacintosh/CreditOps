@@ -1,7 +1,7 @@
 """Generic shape helpers. Every helper sets shape.name for testability."""
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
-from pptx.util import Inches, Pt
+from pptx.util import Inches
 
 from deck import theme
 

@@ -1,5 +1,4 @@
-"""Layout renderers. This task: everything renders as 'standard'.
-Later tasks replace entries in RENDERERS with specialized functions."""
+"""Layout renderers — one render function per layout type, dispatched via RENDERERS."""
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches
 

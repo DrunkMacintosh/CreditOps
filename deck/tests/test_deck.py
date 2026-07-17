@@ -88,6 +88,7 @@ def test_curve_slide(prs):
 def test_pipeline_eight_chevrons(prs):
     slide = list(prs.slides)[6]
     assert names(slide).count("chevron") == 8
+    assert "1. Tiếp nhận nhu cầu" in slide_text(slide)
 
 
 def test_provenance_chain(prs):
@@ -102,6 +103,7 @@ def test_grounding_flow(prs):
     ns = names(slide)
     assert ns.count("source_box") == 6
     assert "layer_box" in ns and "abstain_box" in ns
+    assert "out_box" in ns
 
 
 def test_architecture_bands(prs):
@@ -127,6 +129,7 @@ def test_compare_table(prs):
 def test_criteria_table(prs):
     table = get_table(list(prs.slides)[11], "criteria_table")
     assert table is not None and len(table.rows) == 7
+    assert len(table.columns) == 2
     assert "GenAI" in slide_text(list(prs.slides)[11])
 
 
@@ -134,6 +137,7 @@ def test_validation_metrics(prs):
     slide = list(prs.slides)[12]
     table = get_table(slide, "metric_table")
     assert table is not None and len(table.rows) == 7
+    assert len(table.columns) == 3
     assert "[X%]" in slide_text(slide)
 
 
@@ -155,3 +159,13 @@ def test_closing_slide(prs):
     slide = list(prs.slides)[17]
     ns = names(slide)
     assert ns.count("cta_box") == 3 and "qr_placeholder" in ns
+
+
+def test_all_shapes_within_canvas(prs):
+    for i, slide in enumerate(prs.slides, 1):
+        for sh in slide.shapes:
+            if sh.left is None:
+                continue
+            assert sh.left >= 0 and sh.top >= 0, f"slide {i}: {sh.name} off-canvas"
+            assert sh.left + sh.width <= prs.slide_width, f"slide {i}: {sh.name} exceeds width"
+            assert sh.top + sh.height <= prs.slide_height, f"slide {i}: {sh.name} exceeds height"
