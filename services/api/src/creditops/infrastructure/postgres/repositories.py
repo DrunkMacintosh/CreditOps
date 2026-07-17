@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from types import TracebackType
@@ -14,6 +14,9 @@ from creditops.application.ports.repositories import (
     AuditEvent,
     CaseRecord,
     ForbiddenError,
+    IdempotencyRecord,
+    UploadIntentRecord,
+    UploadRegistration,
 )
 from creditops.application.unit_of_work import ActorContext
 
@@ -258,6 +261,317 @@ class PostgresAuditRepository:
         )
 
 
+class PostgresUploadRepository:
+    def __init__(
+        self,
+        connection: DatabaseConnection,
+        *,
+        id_factory: Callable[[], UUID] = uuid4,
+    ) -> None:
+        self._connection = connection
+        self._id_factory = id_factory
+
+    @staticmethod
+    def _intent_from_row(row: Sequence[Any]) -> UploadIntentRecord:
+        return UploadIntentRecord(
+            id=cast(UUID, row[0]),
+            case_id=cast(UUID, row[1]),
+            case_version=cast(int, row[2]),
+            assigned_officer_id=cast(UUID, row[3]),
+            bucket_id=cast(str, row[4]),
+            object_key=cast(str, row[5]),
+            original_filename=cast(str, row[6]),
+            accepted_content_type=cast(str, row[7]),
+            declared_size_bytes=cast(int, row[8]),
+            expires_at=cast(datetime, row[9]),
+            consumed_at=cast(datetime | None, row[10]),
+        )
+
+    async def create_intent(
+        self,
+        *,
+        intent_id: UUID,
+        case: CaseRecord,
+        original_filename: str,
+        content_type: str,
+        declared_size_bytes: int,
+        bucket_id: str,
+        object_key: str,
+        expires_at: datetime,
+    ) -> UploadIntentRecord:
+        cursor = await self._connection.execute(
+            """
+            insert into public.upload_intents (
+              id, case_id, case_version, assigned_officer_id, bucket_id,
+              object_key, original_filename, accepted_content_type,
+              size_ceiling, declared_size_bytes, expires_at, status
+            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN')
+            returning id, case_id, case_version, assigned_officer_id,
+                      bucket_id, object_key, original_filename,
+                      accepted_content_type, declared_size_bytes,
+                      expires_at, consumed_at
+            """,
+            (
+                intent_id,
+                case.id,
+                case.version,
+                case.assigned_officer_id,
+                bucket_id,
+                object_key,
+                original_filename,
+                content_type,
+                declared_size_bytes,
+                declared_size_bytes,
+                expires_at,
+            ),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Upload intent insert returned no row")
+        return self._intent_from_row(row)
+
+    async def get_intent(self, intent_id: UUID, actor_id: UUID) -> UploadIntentRecord | None:
+        cursor = await self._connection.execute(
+            """
+            select intent.id, intent.case_id, intent.case_version,
+                   intent.assigned_officer_id, intent.bucket_id,
+                   intent.object_key, intent.original_filename,
+                   intent.accepted_content_type, intent.declared_size_bytes,
+                   intent.expires_at, intent.consumed_at
+            from public.upload_intents as intent
+            join public.case_assignments as assignment
+              on assignment.case_id = intent.case_id
+             and assignment.officer_id = intent.assigned_officer_id
+             and assignment.revoked_at is null
+            where intent.id = %s and intent.assigned_officer_id = %s
+            for update
+            """,
+            (intent_id, actor_id),
+        )
+        row = await cursor.fetchone()
+        return None if row is None else self._intent_from_row(row)
+
+    async def find_idempotency(
+        self,
+        *,
+        actor_id: UUID,
+        operation: str,
+        idempotency_key: str,
+    ) -> IdempotencyRecord | None:
+        cursor = await self._connection.execute(
+            """
+            select id, case_id, actor_id, operation, idempotency_key, request_sha256,
+                   lease_owner, lease_until, completed_at, response_status, response_data
+            from public.idempotency_records
+            where actor_id = %s and operation = %s and idempotency_key = %s
+            for update
+            """,
+            (actor_id, operation, idempotency_key),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        response_data = row[10]
+        return IdempotencyRecord(
+            id=cast(UUID, row[0]),
+            case_id=cast(UUID, row[1]),
+            actor_id=cast(UUID, row[2]),
+            operation=cast(str, row[3]),
+            idempotency_key=cast(str, row[4]),
+            request_sha256=cast(str, row[5]),
+            lease_owner=cast(UUID | None, row[6]),
+            lease_until=cast(datetime | None, row[7]),
+            completed_at=cast(datetime | None, row[8]),
+            response_status=cast(int | None, row[9]),
+            response_data=(
+                cast(dict[str, object], response_data) if isinstance(response_data, dict) else None
+            ),
+        )
+
+    async def reserve_idempotency(
+        self,
+        *,
+        case_id: UUID,
+        actor_id: UUID,
+        operation: str,
+        idempotency_key: str,
+        request_sha256: str,
+        lease_until: datetime,
+        lease_owner: UUID,
+    ) -> IdempotencyRecord:
+        await self._connection.execute(
+            """
+            insert into public.idempotency_records (
+              case_id, actor_id, operation, idempotency_key,
+              request_sha256, lease_owner, lease_until
+            ) values (%s, %s, %s, %s, %s, %s, %s)
+            on conflict (actor_id, operation, idempotency_key) do update
+              set lease_owner = excluded.lease_owner,
+                  lease_until = excluded.lease_until
+            where idempotency_records.completed_at is null
+              and (
+                idempotency_records.lease_until is null
+                or idempotency_records.lease_until <= statement_timestamp()
+              )
+            """,
+            (
+                case_id,
+                actor_id,
+                operation,
+                idempotency_key,
+                request_sha256,
+                lease_owner,
+                lease_until,
+            ),
+        )
+        record = await self.find_idempotency(
+            actor_id=actor_id,
+            operation=operation,
+            idempotency_key=idempotency_key,
+        )
+        if record is None:
+            raise RuntimeError("idempotency reservation disappeared")
+        return record
+
+    async def complete_idempotency(
+        self,
+        *,
+        actor_id: UUID,
+        operation: str,
+        idempotency_key: str,
+        response_status: int,
+        response_data: Mapping[str, object],
+        lease_owner: UUID,
+    ) -> None:
+        await self._connection.execute(
+            """
+            update public.idempotency_records
+            set response_status = %s,
+                response_schema_version = '1',
+                response_data = %s,
+                completed_at = clock_timestamp(),
+                lease_owner = null,
+                lease_until = null
+            where actor_id = %s and operation = %s and idempotency_key = %s
+              and lease_owner = %s
+              and lease_until > statement_timestamp()
+              and completed_at is null
+            """,
+            (
+                response_status,
+                Jsonb(dict(response_data)),
+                actor_id,
+                operation,
+                idempotency_key,
+                lease_owner,
+            ),
+        )
+
+    async def find_duplicate_document(
+        self,
+        *,
+        case_id: UUID,
+        content_sha256: str,
+    ) -> UUID | None:
+        cursor = await self._connection.execute(
+            """
+            select document_id
+            from public.document_versions
+            where case_id = %s and content_sha256 = %s and stale_at is null
+            order by created_at asc
+            limit 1
+            """,
+            (case_id, content_sha256),
+        )
+        row = await cursor.fetchone()
+        return None if row is None else cast(UUID, row[0])
+
+    async def register_verified_upload(
+        self,
+        *,
+        intent: UploadIntentRecord,
+        immutable_bucket: str,
+        immutable_key: str,
+        detected_content_type: str,
+        content_sha256: str,
+        task_input: Mapping[str, object],
+        actor_id: UUID,
+    ) -> UploadRegistration:
+        document_id = self._id_factory()
+        document_version_id = self._id_factory()
+        task_id = self._id_factory()
+        await self._connection.execute(
+            "insert into public.documents (id, case_id, created_by) values (%s, %s, %s)",
+            (document_id, intent.case_id, actor_id),
+        )
+        await self._connection.execute(
+            """
+            insert into public.document_versions (
+              id, document_id, case_id, case_version, version, stage,
+              storage_bucket, storage_object_key, original_filename,
+              declared_content_type, detected_content_type, byte_size,
+              content_sha256, created_by
+            ) values (%s, %s, %s, %s, 1, 'REGISTERED', %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                document_version_id,
+                document_id,
+                intent.case_id,
+                intent.case_version,
+                immutable_bucket,
+                immutable_key,
+                intent.original_filename,
+                intent.accepted_content_type,
+                detected_content_type,
+                intent.declared_size_bytes,
+                content_sha256,
+                actor_id,
+            ),
+        )
+        await self._connection.execute(
+            """
+            insert into public.processing_tasks (
+              id, case_id, case_version, document_version_id, task_type,
+              status, max_attempts, input_schema_version, input_payload,
+              idempotency_key
+            ) values (%s, %s, %s, %s, 'DOCUMENT_INGESTION', 'PENDING', 3, '1', %s, %s)
+            """,
+            (
+                task_id,
+                intent.case_id,
+                intent.case_version,
+                document_version_id,
+                Jsonb(dict(task_input)),
+                f"UPLOAD:{intent.id}",
+            ),
+        )
+        return UploadRegistration(
+            document_id=document_id,
+            document_version_id=document_version_id,
+            task_id=task_id,
+            task_status="PENDING",
+        )
+
+    async def consume_intent(
+        self,
+        *,
+        intent_id: UUID,
+        actor_id: UUID,
+        consumed_at: datetime,
+        completion_idempotency_record_id: UUID,
+    ) -> None:
+        await self._connection.execute(
+            """
+            update public.upload_intents
+            set status = 'CONSUMED', consumed_at = %s,
+                completion_idempotency_record_id = %s
+            where id = %s and assigned_officer_id = %s
+              and status = 'OPEN' and consumed_at is null
+            """,
+            (consumed_at, completion_idempotency_record_id, intent_id, actor_id),
+        )
+
+
 class PostgresUnitOfWork:
     def __init__(self, connection_factory: ConnectionFactory, actor: ActorContext) -> None:
         self._connection_factory = connection_factory
@@ -266,6 +580,7 @@ class PostgresUnitOfWork:
         self._transaction_context: AbstractAsyncContextManager[None] | None = None
         self.cases: PostgresCaseRepository
         self.audit: PostgresAuditRepository
+        self.uploads: PostgresUploadRepository
 
     async def __aenter__(self) -> Self:
         self._connection_context = self._connection_factory()
@@ -315,6 +630,7 @@ class PostgresUnitOfWork:
 
         self.cases = PostgresCaseRepository(connection)
         self.audit = PostgresAuditRepository(connection)
+        self.uploads = PostgresUploadRepository(connection)
         return self
 
     async def __aexit__(

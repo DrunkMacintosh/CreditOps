@@ -5,7 +5,11 @@ from types import TracebackType
 from typing import Protocol, Self
 from uuid import UUID
 
-from creditops.application.ports.repositories import AuditRepository, CaseRepository
+from creditops.application.ports.repositories import (
+    AuditRepository,
+    CaseRepository,
+    UploadRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +25,9 @@ class UnitOfWork(Protocol):
 
     @property
     def audit(self) -> AuditRepository: ...
+
+    @property
+    def uploads(self) -> UploadRepository: ...
 
     async def __aenter__(self) -> Self: ...
 

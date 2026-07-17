@@ -18,10 +18,13 @@ from creditops.api.errors import (
     unexpected_exception_handler,
     validation_exception_handler,
 )
+from creditops.api.uploads import router as uploads_router
+from creditops.application.ports.storage import StoragePort
 from creditops.application.unit_of_work import UnitOfWorkFactory
 from creditops.config import Settings
 from creditops.infrastructure.postgres.repositories import PostgresUnitOfWorkFactory
 from creditops.infrastructure.postgres.session import PsycopgConnectionFactory
+from creditops.infrastructure.supabase.storage import SupabaseStorage
 from creditops.observability import configure_structured_logging
 from creditops.security_headers import SecurityHeadersMiddleware
 
@@ -33,9 +36,12 @@ def create_app(
     settings: Settings | None = None,
     jwt_verifier: JwtVerifier | None = None,
     uow_factory: UnitOfWorkFactory | None = None,
+    storage_port: StoragePort | None = None,
 ) -> FastAPI:
     configured = settings or Settings()
-    if configured.app_env != "test" and (jwt_verifier is not None or uow_factory is not None):
+    if configured.app_env != "test" and (
+        jwt_verifier is not None or uow_factory is not None or storage_port is not None
+    ):
         raise ValueError("Dependency injection overrides are available only in APP_ENV=test")
 
     if configured.app_env != "test":
@@ -71,9 +77,12 @@ def create_app(
         uow_factory = PostgresUnitOfWorkFactory(
             PsycopgConnectionFactory(configured.database_url.get_secret_value())
         )
+    if storage_port is None and configured.supabase_url and configured.supabase_service_role_key:
+        storage_port = SupabaseStorage(configured)
 
     application.state.jwt_verifier = jwt_verifier
     application.state.uow_factory = uow_factory
+    application.state.storage = storage_port
 
     @application.middleware("http")
     async def assign_correlation_id(
@@ -97,6 +106,7 @@ def create_app(
         return {"service": configured.service_name, "status": "configuration-valid"}
 
     application.include_router(cases_router)
+    application.include_router(uploads_router)
     return application
 
 
