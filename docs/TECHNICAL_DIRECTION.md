@@ -4,7 +4,7 @@
 
 This document separates approved architecture from proposed provider configuration and unresolved controls.
 
-**CONFIRMED:** No prototype or cloud environment has been created. The approved target architecture uses Vercel for the Vietnamese web interface, Google Cloud Run for the FastAPI API and an asynchronous `creditops-worker` Job, Supabase for durable shared state, queues, private object storage, retrieval indexes, and audit records, and FPT AI Factory only for managed model inference.
+**CONFIRMED:** A local walking-skeleton prototype now exercises the approved application boundaries. No cloud environment has been provisioned. The target architecture remains Vercel for the Vietnamese web interface, Google Cloud Run for the FastAPI API and an asynchronous `creditops-worker` Job, Supabase for durable shared state, queues, private object storage, retrieval indexes, and audit records, and FPT AI Factory only for managed model inference.
 
 **SUPERSEDED:** The earlier hourly FPT H100 VM, local NVMe, vLLM, and locally hosted open-weight model design is retained in [Decision Log](DECISION_LOG.md) but is not the implementation target.
 
@@ -242,7 +242,7 @@ Capacity and availability claims require measured evidence. No production-readin
 
 ## Non-commitments
 
-- **CONFIRMED:** No prototype or cloud environment is implemented.
+- **CONFIRMED:** The local prototype is implemented, but no cloud environment is deployed and no production-data authorization exists. Live Supabase, Cloud Run, and FPT verification remain open gates.
 - **OPEN QUESTION:** No model or document endpoint has passed the required benchmark.
 - **OPEN QUESTION:** No official SHB identity, policy, checklist, retention, region, or production-data authorization has been supplied.
 - **OUT OF SCOPE:** Production KYC/AML, CIC, collateral valuation, LOS/ACAS integration, contract execution, and disbursement.

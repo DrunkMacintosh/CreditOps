@@ -74,7 +74,8 @@ The official checklist, document validity rules, and stage-specific requirements
 - **CONFIRMED:** Six conceptual agent roles and Evidence Gap Resolution have been defined.
 - **CONFIRMED:** The target managed architecture is Vercel for the frontend, Cloud Run for the FastAPI API and asynchronous `creditops-worker` Job, Supabase for durable state, queues, object storage, and retrieval metadata, and FPT AI Factory for managed inference only.
 - **CONFIRMED:** The earlier hourly FPT H100 VM and local vLLM direction is superseded and retained only as decision history.
-- **CONFIRMED:** No prototype has been implemented.
+- **CONFIRMED:** A local walking-skeleton prototype is implemented: Vietnamese case/intake flows, assigned-officer access, private Supabase upload intents and completion verification, durable identifier-only queue contracts, worker-slot leases with checkpointed retry/redelivery semantics, Cloud Run dispatch contracts, safe document parsing, and an FPT capability gateway.
+- **CONFIRMED:** The prototype is not a deployed banking system. Supabase, Cloud Run, Vercel, and FPT endpoints remain unprovisioned in this workspace; the worker refuses to run without injected real dependencies, and FPT live smoke tests remain skipped until exact managed endpoint configuration and credentials are supplied.
 - **CONFIRMED:** None of the target managed services has been provisioned or deployed.
 - **OPEN QUESTION:** No final model has passed the required Vietnamese banking and document benchmarks.
 - **OPEN QUESTION:** No official SHB policy corpus, checklist, workflow configuration, credit memo template, or API sandbox is currently available.
