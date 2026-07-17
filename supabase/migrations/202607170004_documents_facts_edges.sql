@@ -50,7 +50,7 @@ create table public.document_versions (
     on delete restrict,
   constraint document_versions_document_version_key unique (document_id, version),
   constraint document_versions_storage_key unique (storage_bucket, storage_object_key),
-  constraint document_versions_id_case_key unique (id, case_id),
+  constraint document_versions_id_case_version_key unique (id, case_id, case_version),
   constraint document_versions_stale_after_creation
     check (stale_at is null or stale_at >= created_at)
 );
@@ -134,11 +134,11 @@ create table public.page_regions (
   created_at timestamptz not null default clock_timestamp(),
   constraint page_regions_within_page check (x + width <= 1 and y + height <= 1),
   constraint page_regions_document_case_fk
-    foreign key (document_version_id, case_id)
-    references public.document_versions(id, case_id)
+    foreign key (document_version_id, case_id, case_version)
+    references public.document_versions(id, case_id, case_version)
     on delete restrict,
-  constraint page_regions_id_case_document_key
-    unique (id, case_id, document_version_id)
+  constraint page_regions_id_case_version_document_key
+    unique (id, case_id, case_version, document_version_id)
 );
 
 create index page_regions_document_page_idx
@@ -160,12 +160,12 @@ create table public.candidate_facts (
   created_at timestamptz not null default clock_timestamp(),
   stale_at timestamptz,
   constraint candidate_facts_document_case_fk
-    foreign key (document_version_id, case_id)
-    references public.document_versions(id, case_id)
+    foreign key (document_version_id, case_id, case_version)
+    references public.document_versions(id, case_id, case_version)
     on delete restrict,
   constraint candidate_facts_region_case_document_fk
-    foreign key (page_region_id, case_id, document_version_id)
-    references public.page_regions(id, case_id, document_version_id)
+    foreign key (page_region_id, case_id, case_version, document_version_id)
+    references public.page_regions(id, case_id, case_version, document_version_id)
     on delete restrict,
   constraint candidate_facts_id_case_version_key unique (id, case_id, case_version),
   constraint candidate_facts_stale_after_creation
@@ -242,18 +242,160 @@ create table public.confirmed_facts (
     references public.fact_confirmations(id, candidate_fact_id, case_id, case_version)
     on delete restrict,
   constraint confirmed_facts_document_case_fk
-    foreign key (document_version_id, case_id)
-    references public.document_versions(id, case_id)
+    foreign key (document_version_id, case_id, case_version)
+    references public.document_versions(id, case_id, case_version)
     on delete restrict,
   constraint confirmed_facts_region_case_document_fk
-    foreign key (page_region_id, case_id, document_version_id)
-    references public.page_regions(id, case_id, document_version_id)
+    foreign key (page_region_id, case_id, case_version, document_version_id)
+    references public.page_regions(id, case_id, case_version, document_version_id)
     on delete restrict,
-  constraint confirmed_facts_id_case_key unique (id, case_id),
+  constraint confirmed_facts_id_case_version_key unique (id, case_id, case_version),
   constraint confirmed_facts_one_per_confirmation unique (confirmation_id),
   constraint confirmed_facts_stale_after_creation
     check (stale_at is null or stale_at >= created_at)
 );
+
+create or replace function public.derive_and_protect_confirmed_fact()
+returns trigger
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+declare
+  candidate_record public.candidate_facts%rowtype;
+  confirmation_record public.fact_confirmations%rowtype;
+  expected_value jsonb;
+begin
+  if tg_op = 'DELETE' then
+    raise exception using
+      errcode = '42501',
+      message = 'confirmed facts cannot be deleted';
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if row(
+      new.id,
+      new.case_id,
+      new.case_version,
+      new.candidate_fact_id,
+      new.confirmation_id,
+      new.document_version_id,
+      new.page_region_id,
+      new.field_key,
+      new.value,
+      new.candidate_value,
+      new.fact_schema_version,
+      new.confirmed_at,
+      new.created_at
+    ) is distinct from row(
+      old.id,
+      old.case_id,
+      old.case_version,
+      old.candidate_fact_id,
+      old.confirmation_id,
+      old.document_version_id,
+      old.page_region_id,
+      old.field_key,
+      old.value,
+      old.candidate_value,
+      old.fact_schema_version,
+      old.confirmed_at,
+      old.created_at
+    ) then
+      raise exception using
+        errcode = '42501',
+        message = 'confirmed fact authoritative fields are immutable';
+    end if;
+    return new;
+  end if;
+
+  select * into candidate_record
+  from public.candidate_facts
+  where id = new.candidate_fact_id;
+  if not found then
+    raise exception using
+      errcode = '23503',
+      message = 'confirmed fact candidate does not exist';
+  end if;
+
+  select * into confirmation_record
+  from public.fact_confirmations
+  where id = new.confirmation_id
+    and candidate_fact_id = new.candidate_fact_id;
+  if not found then
+    raise exception using
+      errcode = '23503',
+      message = 'confirmed fact confirmation does not match candidate';
+  end if;
+
+  if confirmation_record.disposition = 'ACCEPTED' then
+    expected_value := candidate_record.proposed_value;
+  elsif confirmation_record.disposition = 'CORRECTED' then
+    expected_value := confirmation_record.corrected_value;
+  else
+    raise exception using
+      errcode = '23514',
+      message = 'confirmation disposition does not support a confirmed fact';
+  end if;
+
+  if confirmation_record.case_id <> candidate_record.case_id
+    or confirmation_record.case_version <> candidate_record.case_version then
+    raise exception using
+      errcode = '23514',
+      message = 'confirmation and candidate case version mismatch';
+  end if;
+
+  if (new.case_id is not null and new.case_id is distinct from candidate_record.case_id)
+    or (
+      new.case_version is not null
+      and new.case_version is distinct from candidate_record.case_version
+    )
+    or (
+      new.document_version_id is not null
+      and new.document_version_id is distinct from candidate_record.document_version_id
+    )
+    or (
+      new.page_region_id is not null
+      and new.page_region_id is distinct from candidate_record.page_region_id
+    )
+    or (new.field_key is not null and new.field_key is distinct from candidate_record.field_key)
+    or (
+      new.candidate_value is not null
+      and new.candidate_value is distinct from candidate_record.proposed_value
+    )
+    or (new.value is not null and new.value is distinct from expected_value)
+    or (
+      new.confirmed_at is not null
+      and new.confirmed_at is distinct from confirmation_record.confirmed_at
+    ) then
+    raise exception using
+      errcode = '23514',
+      message = 'caller-supplied confirmed fact fields do not match authoritative evidence';
+  end if;
+
+  if new.stale_at is not null then
+    raise exception using
+      errcode = '23514',
+      message = 'new confirmed facts cannot start stale';
+  end if;
+
+  new.case_id := candidate_record.case_id;
+  new.case_version := candidate_record.case_version;
+  new.document_version_id := candidate_record.document_version_id;
+  new.page_region_id := candidate_record.page_region_id;
+  new.field_key := candidate_record.field_key;
+  new.candidate_value := candidate_record.proposed_value;
+  new.value := expected_value;
+  new.confirmed_at := confirmation_record.confirmed_at;
+  return new;
+end;
+$$;
+
+revoke all on function public.derive_and_protect_confirmed_fact() from public;
+
+create trigger confirmed_facts_derive_and_protect
+before insert or update or delete on public.confirmed_facts
+for each row execute function public.derive_and_protect_confirmed_fact();
 
 create index confirmed_facts_case_field_idx
   on public.confirmed_facts (case_id, case_version, field_key)

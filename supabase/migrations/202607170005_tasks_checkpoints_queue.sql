@@ -29,11 +29,11 @@ create table public.processing_tasks (
   updated_at timestamptz not null default clock_timestamp(),
   completed_at timestamptz,
   constraint processing_tasks_document_case_fk
-    foreign key (document_version_id, case_id)
-    references public.document_versions(id, case_id)
+    foreign key (document_version_id, case_id, case_version)
+    references public.document_versions(id, case_id, case_version)
     on delete restrict,
   constraint processing_tasks_case_idempotency_key unique (case_id, idempotency_key),
-  constraint processing_tasks_id_case_key unique (id, case_id),
+  constraint processing_tasks_id_case_version_key unique (id, case_id, case_version),
   constraint processing_tasks_lease_pair check (
     (lease_token is null and lease_until is null)
     or (lease_token is not null and lease_until is not null)
@@ -61,8 +61,8 @@ create table public.task_checkpoints (
   checkpoint_data jsonb not null check (jsonb_typeof(checkpoint_data) = 'object'),
   created_at timestamptz not null default clock_timestamp(),
   constraint task_checkpoints_task_case_fk
-    foreign key (task_id, case_id)
-    references public.processing_tasks(id, case_id)
+    foreign key (task_id, case_id, case_version)
+    references public.processing_tasks(id, case_id, case_version)
     on delete restrict,
   constraint task_checkpoints_task_sequence_key unique (task_id, sequence_no)
 );
@@ -114,11 +114,58 @@ create table public.worker_slots (
 
 insert into public.worker_slots (slot_no) values (1);
 
+create or replace function public.try_acquire_worker_slot(
+  requested_lease_owner uuid,
+  requested_lease_token uuid,
+  requested_lease_until timestamptz
+)
+returns boolean
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+declare
+  updated_rows integer;
+begin
+  if requested_lease_owner is null
+    or requested_lease_token is null
+    or requested_lease_until <= statement_timestamp() then
+    raise exception using
+      errcode = '22023',
+      message = 'worker lease requires owner, token, and a future expiry';
+  end if;
+
+  update public.worker_slots
+  set lease_owner = requested_lease_owner,
+      lease_token = requested_lease_token,
+      lease_until = requested_lease_until,
+      updated_at = clock_timestamp()
+  where slot_no = 1
+    and (
+      lease_until is null
+      or lease_until <= statement_timestamp()
+      or (
+        lease_owner = requested_lease_owner
+        and lease_token = requested_lease_token
+      )
+    );
+
+  get diagnostics updated_rows = row_count;
+  return updated_rows = 1;
+end;
+$$;
+
+revoke all on function public.try_acquire_worker_slot(uuid, uuid, timestamptz)
+  from public, anon, authenticated;
+grant execute on function public.try_acquire_worker_slot(uuid, uuid, timestamptz)
+  to service_role;
+
 select pgmq.create('creditops_document_tasks');
 
 revoke all on schema pgmq from public, anon, authenticated;
 revoke all on all tables in schema pgmq from anon, authenticated;
-revoke execute on all functions in schema pgmq from public, anon, authenticated;
+revoke execute on all functions in schema pgmq
+  from public, anon, authenticated, service_role;
 grant usage on schema pgmq to service_role;
 grant execute on function pgmq.send(text, jsonb, integer) to service_role;
 grant execute on function pgmq.read(text, integer, integer) to service_role;

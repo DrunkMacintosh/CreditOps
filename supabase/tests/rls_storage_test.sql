@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, storage, pg_catalog;
 
-select plan(6);
+select plan(9);
 
 insert into storage.buckets (id, name, public)
 values ('creditops-incoming', 'creditops-incoming', false)
@@ -57,6 +57,17 @@ values
     'application/pdf',
     1048576,
     clock_timestamp() - interval '1 minute'
+  ),
+  (
+    '20000000-0000-0000-0000-000000000003',
+    '10000000-0000-0000-0000-000000000001',
+    1,
+    '00000000-0000-0000-0000-000000000001',
+    'creditops-incoming',
+    'incoming/10000000-0000-0000-0000-000000000001/20000000-0000-0000-0000-000000000003',
+    'application/pdf',
+    1048576,
+    clock_timestamp() + interval '5 minutes'
   );
 
 select is(
@@ -102,6 +113,18 @@ select lives_ok(
     )
   $$,
   'the assigned officer can upload to the exact active-intent path'
+);
+
+select throws_ok(
+  $$
+    update storage.objects
+    set metadata = '{"attempted_upsert": true}'::jsonb
+    where bucket_id = 'creditops-incoming'
+      and name = 'incoming/10000000-0000-0000-0000-000000000001/20000000-0000-0000-0000-000000000001'
+  $$,
+  '42501',
+  null,
+  'authenticated object update is denied, independent of policy naming'
 );
 
 select throws_ok(
@@ -156,6 +179,38 @@ select throws_ok(
   '42501',
   null,
   'an expired upload intent cannot authorize a Storage insert'
+);
+
+reset role;
+update public.case_assignments
+set revoked_at = clock_timestamp()
+where case_id = '10000000-0000-0000-0000-000000000001';
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claim.sub',
+  '00000000-0000-0000-0000-000000000001',
+  true
+);
+
+select is(
+  (select count(*) from public.upload_intents),
+  0::bigint,
+  'revoking the case assignment removes upload-intent visibility'
+);
+
+select throws_ok(
+  $$
+    insert into storage.objects (bucket_id, name, owner_id)
+    values (
+      'creditops-incoming',
+      'incoming/10000000-0000-0000-0000-000000000001/20000000-0000-0000-0000-000000000003',
+      '00000000-0000-0000-0000-000000000001'
+    )
+  $$,
+  '42501',
+  null,
+  'a live intent cannot authorize upload after assignment revocation'
 );
 
 select * from finish();

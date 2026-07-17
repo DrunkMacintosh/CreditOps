@@ -21,12 +21,12 @@ create table public.evidence_conflicts (
   constraint evidence_conflicts_distinct_facts
     check (left_confirmed_fact_id <> right_confirmed_fact_id),
   constraint evidence_conflicts_left_fact_case_fk
-    foreign key (left_confirmed_fact_id, case_id)
-    references public.confirmed_facts(id, case_id)
+    foreign key (left_confirmed_fact_id, case_id, case_version)
+    references public.confirmed_facts(id, case_id, case_version)
     on delete restrict,
   constraint evidence_conflicts_right_fact_case_fk
-    foreign key (right_confirmed_fact_id, case_id)
-    references public.confirmed_facts(id, case_id)
+    foreign key (right_confirmed_fact_id, case_id, case_version)
+    references public.confirmed_facts(id, case_id, case_version)
     on delete restrict,
   constraint evidence_conflicts_fact_pair_key
     unique (case_id, case_version, left_confirmed_fact_id, right_confirmed_fact_id),
@@ -69,8 +69,8 @@ create table public.evidence_gaps (
   resolved_at timestamptz,
   stale_at timestamptz,
   constraint evidence_gaps_task_case_fk
-    foreign key (affected_task_id, case_id)
-    references public.processing_tasks(id, case_id)
+    foreign key (affected_task_id, case_id, case_version)
+    references public.processing_tasks(id, case_id, case_version)
     on delete restrict,
   constraint evidence_gaps_time_order check (
     (resolved_at is null or resolved_at >= created_at)
@@ -96,8 +96,8 @@ create table public.handoffs (
   created_at timestamptz not null default clock_timestamp(),
   stale_at timestamptz,
   constraint handoffs_task_case_fk
-    foreign key (source_task_id, case_id)
-    references public.processing_tasks(id, case_id)
+    foreign key (source_task_id, case_id, case_version)
+    references public.processing_tasks(id, case_id, case_version)
     on delete restrict,
   constraint handoffs_case_version_key unique (case_id, case_version, id),
   constraint handoffs_stale_after_creation

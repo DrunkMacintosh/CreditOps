@@ -23,12 +23,12 @@ create table public.retrieval_passages (
   created_at timestamptz not null default clock_timestamp(),
   stale_at timestamptz,
   constraint retrieval_passages_document_case_fk
-    foreign key (document_version_id, case_id)
-    references public.document_versions(id, case_id)
+    foreign key (document_version_id, case_id, case_version)
+    references public.document_versions(id, case_id, case_version)
     on delete restrict,
   constraint retrieval_passages_region_case_document_fk
-    foreign key (page_region_id, case_id, document_version_id)
-    references public.page_regions(id, case_id, document_version_id)
+    foreign key (page_region_id, case_id, case_version, document_version_id)
+    references public.page_regions(id, case_id, case_version, document_version_id)
     on delete restrict,
   constraint retrieval_passages_embedding_metadata check (
     (embedding is null and embedding_model is null and embedding_version is null)

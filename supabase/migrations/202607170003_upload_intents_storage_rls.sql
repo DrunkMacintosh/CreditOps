@@ -90,6 +90,10 @@ using (
   )
 );
 
+-- Upsert requires UPDATE in addition to INSERT and SELECT. Keep browser uploads
+-- create-only even if another Storage policy is introduced later.
+revoke update on storage.objects from anon, authenticated;
+
 revoke all on public.upload_intents from public, anon, authenticated;
 grant select on public.upload_intents to authenticated;
 grant all on public.upload_intents to service_role;
