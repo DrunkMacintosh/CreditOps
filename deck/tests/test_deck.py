@@ -135,3 +135,23 @@ def test_validation_metrics(prs):
     table = get_table(slide, "metric_table")
     assert table is not None and len(table.rows) == 7
     assert "[X%]" in slide_text(slide)
+
+
+def test_axes_slide(prs):
+    assert names(list(prs.slides)[13]).count("axis_box") == 3
+
+
+def test_roadmap_milestones(prs):
+    assert names(list(prs.slides)[15]).count("milestone") == 5
+
+
+def test_team_cards(prs):
+    slide = list(prs.slides)[16]
+    assert names(slide).count("member_card") == 5
+    assert "[Họ tên]" in slide_text(slide)
+
+
+def test_closing_slide(prs):
+    slide = list(prs.slides)[17]
+    ns = names(slide)
+    assert ns.count("cta_box") == 3 and "qr_placeholder" in ns

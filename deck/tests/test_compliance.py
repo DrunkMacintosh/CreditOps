@@ -52,10 +52,7 @@ def test_no_forbidden_claims(prs):
 
 def test_input_slots_still_present_until_filled(prs):
     # Guards against someone silently deleting the slots instead of filling them.
-    # Slides 13/15 render their slots in every layout stage; slide 17's slots live
-    # in extra.members and reach the rendered deck only with Task 8's team layout —
-    # Task 8 must extend this set to (13, 15, 17).
     slides = list(prs.slides)
-    for idx in (13, 15):
+    for idx in (13, 15, 17):
         assert re.search(r"\[[^\]]+\]", slide_text(slides[idx - 1])), \
             f"slide {idx}: expected input slots"

@@ -262,6 +262,63 @@ def render_validation(prs, spec):
     return slide
 
 
+def render_axes(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    for i, (head, body) in enumerate(spec["extra"]["axes"]):
+        builders.box(slide, Inches(0.5) + i * Inches(4.3), Inches(1.5),
+                     Inches(4.1), Inches(3.0), f"{head}\n\n{body}",
+                     theme.DEEP_BLUE, name="axis_box")
+    builders.add_bullets(slide, spec["bullets"], Inches(0.5), Inches(4.8),
+                         Inches(12.3), Inches(1.2), size=theme.SMALL_SIZE)
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_roadmap(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    for i, (when, what) in enumerate(x["milestones"]):
+        fill = theme.ORANGE if i == 0 else theme.DEEP_BLUE
+        builders.box(slide, Inches(0.4) + i * Inches(2.6), Inches(2.2),
+                     Inches(2.45), Inches(2.6), f"{when}\n\n{what}", fill,
+                     name="milestone")
+    builders.tb(slide, Inches(0.4), Inches(5.3), Inches(12.5), Inches(0.6),
+                x["note"], size=theme.SMALL_SIZE, color=theme.GRAY)
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_team(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    for i, (name_, role, built, strength) in enumerate(spec["extra"]["members"]):
+        builders.box(slide, Inches(0.4) + i * Inches(2.6), Inches(1.6),
+                     Inches(2.45), Inches(3.4),
+                     f"{name_}\n{role}\n\n{built}\n{strength}",
+                     theme.DEEP_BLUE, name="member_card")
+    builders.add_killer(slide, spec["killer"])
+    builders.add_footer(slide, spec)
+    return slide
+
+
+def render_closing(prs, spec):
+    slide = builders.add_blank(prs)
+    builders.add_title(slide, spec)
+    x = spec["extra"]
+    for i, cta in enumerate(x["ctas"]):
+        builders.box(slide, Inches(0.6), Inches(1.8) + i * Inches(1.1),
+                     Inches(7.6), Inches(0.95), cta, theme.DEEP_BLUE,
+                     name="cta_box")
+    qr = builders.add_placeholder(slide, Inches(8.7), Inches(1.8), Inches(4.0),
+                                  Inches(3.2), x["qr"])
+    qr.name = "qr_placeholder"
+    builders.add_killer(slide, spec["killer"])
+    builders.add_footer(slide, spec)
+    return slide
+
+
 RENDERERS = {name: render_standard for name in content.LAYOUTS}
 RENDERERS.update({
     "hook": render_hook,
@@ -280,4 +337,10 @@ RENDERERS.update({
     "compare_table": render_compare_table,
     "criteria": render_criteria,
     "validation": render_validation,
+})
+RENDERERS.update({
+    "axes": render_axes,
+    "roadmap": render_roadmap,
+    "team": render_team,
+    "closing": render_closing,
 })
