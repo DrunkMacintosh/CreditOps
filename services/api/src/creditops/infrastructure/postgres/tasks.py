@@ -7,7 +7,7 @@ crash without holding a browser transaction open.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Any, Protocol, cast
@@ -24,22 +24,11 @@ from creditops.application.ports.queue import (
     TaskRepository,
 )
 from creditops.domain.enums import TaskStatus
-
-
-class Cursor(Protocol):
-    async def fetchone(self) -> tuple[Any, ...] | None: ...
-
-    async def fetchall(self) -> list[tuple[Any, ...]]: ...
-
-
-class Connection(Protocol):
-    def transaction(self) -> AbstractAsyncContextManager[None]: ...
-
-    async def execute(self, query: str, params: tuple[object, ...] | None = None) -> Cursor: ...
+from creditops.infrastructure.postgres.repositories import DatabaseConnection
 
 
 class ConnectionFactory(Protocol):
-    def __call__(self) -> AbstractAsyncContextManager[Connection]: ...
+    def __call__(self) -> AbstractAsyncContextManager[DatabaseConnection]: ...
 
 
 class PostgresTaskRepository(TaskRepository):
@@ -74,6 +63,28 @@ class PostgresTaskRepository(TaskRepository):
                     """,
                     (lease_owner, lease_token),
                 )
+
+    async def extend_worker_slot(
+        self,
+        *,
+        lease_owner: UUID,
+        lease_token: UUID,
+        lease_until: datetime,
+    ) -> bool:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                cursor = await connection.execute(
+                    """
+                    update public.worker_slots
+                    set lease_until = %s, updated_at = clock_timestamp()
+                    where slot_no = 1 and lease_owner = %s and lease_token = %s
+                      and lease_until > statement_timestamp()
+                    returning slot_no
+                    """,
+                    (lease_until, lease_owner, lease_token),
+                )
+                row = await cursor.fetchone()
+        return row is not None
 
     async def claim(
         self,
@@ -303,6 +314,7 @@ class PostgresTaskRepository(TaskRepository):
                     update public.processing_tasks
                     set status = case when attempt_count >= max_attempts
                                       then 'FAILED_MANUAL_REVIEW' else 'RETRY_WAIT' end,
+                        failure_reason = %s,
                         available_at = case when attempt_count >= max_attempts
                                             then available_at
                                             else %s + (
@@ -318,6 +330,7 @@ class PostgresTaskRepository(TaskRepository):
                     returning status, attempt_count, available_at
                     """,
                     (
+                        reason,
                         now,
                         base_delay_seconds,
                         task_id,
@@ -333,7 +346,7 @@ class PostgresTaskRepository(TaskRepository):
         return RetryDecision(TaskStatus(str(row[0])), int(row[1]), row[2], reason)
 
 
-def _task(row: tuple[Any, ...]) -> TaskRecord:
+def _task(row: Sequence[Any]) -> TaskRecord:
     payload = row[11]
     if not isinstance(payload, dict):
         raise ValueError("task payload is not an object")
@@ -354,7 +367,7 @@ def _task(row: tuple[Any, ...]) -> TaskRecord:
     )
 
 
-def _checkpoint(row: tuple[Any, ...]) -> TaskCheckpoint:
+def _checkpoint(row: Sequence[Any]) -> TaskCheckpoint:
     data = row[7]
     if not isinstance(data, dict):
         raise ValueError("checkpoint payload is not an object")

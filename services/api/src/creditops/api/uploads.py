@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from creditops.api.auth import require_actor
 from creditops.api.errors import ApiException
+from creditops.application.ports.queue import QueueError, QueuePort, TaskRepository
 from creditops.application.ports.storage import StorageError, StoragePort
 from creditops.application.unit_of_work import ActorContext, UnitOfWorkFactory
 from creditops.application.use_cases.complete_upload_intent import (
@@ -27,6 +28,8 @@ from creditops.application.use_cases.create_upload_intent import (
     CreateUploadIntentCommand,
     UploadIntentValidationError,
 )
+from creditops.application.use_cases.enqueue_task import EnqueueTask, TaskEnqueueError
+from creditops.domain.tasks import TaskEnvelopeV1
 
 router = APIRouter(tags=["uploads"])
 
@@ -112,6 +115,29 @@ def _storage(request: Request) -> StoragePort:
             retryable=True,
         )
     return cast(StoragePort, storage)
+
+
+async def _enqueue_registered_task(request: Request, result: RegisteredUpload) -> None:
+    """Enqueue only after the registration transaction has committed.
+
+    Completion is idempotent, so a client retry can safely repair a transient
+    queue outage without creating another document or task row.
+    """
+    queue = getattr(request.app.state, "task_queue", None)
+    tasks = getattr(request.app.state, "task_repository", None)
+    if queue is None or tasks is None:
+        return
+    task_repository = cast(TaskRepository, tasks)
+    task = await task_repository.get(result.task_id)
+    if task is None:
+        raise TaskEnqueueError("registered task is not visible to the queue publisher")
+    envelope = TaskEnvelopeV1(
+        task_id=task.id,
+        case_id=task.case_id,
+        case_version=task.case_version,
+        document_version_id=task.document_version_id,
+    )
+    await EnqueueTask(task_repository, cast(QueuePort, queue)).execute(envelope)
 
 
 def _require_intake(actor: ActorContext) -> None:
@@ -247,6 +273,15 @@ async def complete_upload_intent(
             duplicate_of_document_id=result.duplicate_of_document_id,
         )
     if isinstance(result, RegisteredUpload):
+        try:
+            await _enqueue_registered_task(request, result)
+        except (QueueError, TaskEnqueueError) as exc:
+            raise ApiException(
+                status_code=503,
+                code="TASK_QUEUE_UNAVAILABLE",
+                message_vi="Tài liệu đã đăng ký nhưng chưa thể đưa vào hàng đợi xử lý.",
+                retryable=True,
+            ) from exc
         return RegisteredUploadResponse(
             outcome="REGISTERED",
             document_id=result.document_id,

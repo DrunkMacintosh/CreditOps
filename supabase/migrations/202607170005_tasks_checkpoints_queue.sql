@@ -25,6 +25,7 @@ create table public.processing_tasks (
   input_schema_version text not null default '1' check (length(input_schema_version) > 0),
   input_payload jsonb not null check (jsonb_typeof(input_payload) = 'object'),
   idempotency_key text not null check (length(btrim(idempotency_key)) > 0),
+  failure_reason text check (failure_reason is null or length(failure_reason) between 1 and 2000),
   created_at timestamptz not null default clock_timestamp(),
   updated_at timestamptz not null default clock_timestamp(),
   completed_at timestamptz,
@@ -54,6 +55,7 @@ create table public.task_checkpoints (
   task_id uuid not null,
   case_id uuid not null references public.credit_cases(id) on delete restrict,
   case_version integer not null check (case_version > 0),
+  document_version_id uuid not null,
   sequence_no integer not null check (sequence_no > 0),
   checkpoint_type text not null check (length(btrim(checkpoint_type)) > 0),
   checkpoint_schema_version text not null default '1'
@@ -63,6 +65,10 @@ create table public.task_checkpoints (
   constraint task_checkpoints_task_case_fk
     foreign key (task_id, case_id, case_version)
     references public.processing_tasks(id, case_id, case_version)
+    on delete restrict,
+  constraint task_checkpoints_document_case_fk
+    foreign key (document_version_id, case_id, case_version)
+    references public.document_versions(id, case_id, case_version)
     on delete restrict,
   constraint task_checkpoints_task_sequence_key unique (task_id, sequence_no)
 );

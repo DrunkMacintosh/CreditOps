@@ -106,11 +106,12 @@ values (
 select throws_ok(
   $$
     insert into public.task_checkpoints (
-      task_id, case_id, case_version, sequence_no,
+      task_id, case_id, case_version, document_version_id, sequence_no,
       checkpoint_type, checkpoint_data
     ) values (
       '40000000-0000-0000-0000-000000000001',
       '10000000-0000-0000-0000-000000000001', 2,
+      '61000000-0000-0000-0000-000000000001',
       1, 'SYNTHETIC_TEST', '{}'::jsonb
     )
   $$,

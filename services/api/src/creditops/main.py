@@ -18,8 +18,8 @@ from creditops.api.errors import (
     unexpected_exception_handler,
     validation_exception_handler,
 )
-from creditops.api.uploads import router as uploads_router
 from creditops.api.tasks import router as tasks_router
+from creditops.api.uploads import router as uploads_router
 from creditops.application.ports.storage import StoragePort
 from creditops.application.unit_of_work import UnitOfWorkFactory
 from creditops.config import Settings

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from psycopg.types.json import Jsonb
 
@@ -11,11 +13,13 @@ from creditops.application.ports.queue import QueueError, QueueMessage, QueuePor
 from creditops.domain.tasks import TaskEnvelopeV1
 from creditops.infrastructure.postgres.repositories import DatabaseConnection
 
+ConnectionFactory = Callable[[], AbstractAsyncContextManager[DatabaseConnection]]
+
 
 class SupabaseQueue(QueuePort):
     def __init__(
         self,
-        connection: DatabaseConnection,
+        connection: DatabaseConnection | ConnectionFactory,
         *,
         queue_name: str = "creditops_document_tasks",
     ) -> None:
@@ -27,11 +31,10 @@ class SupabaseQueue(QueuePort):
     async def send(self, envelope: TaskEnvelopeV1, *, delay_seconds: int = 0) -> int:
         if delay_seconds < 0 or delay_seconds > 86_400:
             raise QueueError("queue delay is outside the bounded contract")
-        cursor = await self._connection.execute(
+        row = await self._fetchone(
             "select pgmq.send(%s, %s, %s)",
             (self._queue_name, Jsonb(envelope.model_dump(mode="json")), delay_seconds),
         )
-        row = await cursor.fetchone()
         if row is None or not isinstance(row[0], int):
             raise QueueError("PGMQ did not return a message identifier")
         return row[0]
@@ -39,11 +42,10 @@ class SupabaseQueue(QueuePort):
     async def read_one(self, *, visibility_timeout_seconds: int) -> QueueMessage | None:
         if visibility_timeout_seconds <= 0 or visibility_timeout_seconds > 86_400:
             raise QueueError("queue visibility timeout is outside the bounded contract")
-        cursor = await self._connection.execute(
+        row = await self._fetchone(
             "select * from pgmq.read(%s, %s, %s)",
             (self._queue_name, visibility_timeout_seconds, 1),
         )
-        row = await cursor.fetchone()
         if row is None:
             return None
         if len(row) < 4:
@@ -71,24 +73,37 @@ class SupabaseQueue(QueuePort):
         # PGMQ set_vt takes an absolute timestamp; do not interpolate untrusted
         # values into SQL.  The queue name is validated in the constructor.
         visible_at = datetime.now(UTC) + timedelta(seconds=visibility_timeout_seconds)
-        cursor = await self._connection.execute(
+        row = await self._fetchone(
             "select pgmq.set_vt(%s, %s, %s)",
             (self._queue_name, message_id, visible_at),
         )
-        row = await cursor.fetchone()
         if row is not None and row[0] is False:
             raise QueueError("PGMQ visibility extension was rejected")
 
     async def archive(self, message_id: int) -> None:
         if message_id <= 0:
             raise QueueError("queue message identifier is invalid")
-        cursor = await self._connection.execute(
+        row = await self._fetchone(
             "select pgmq.archive(%s, %s)",
             (self._queue_name, message_id),
         )
-        row = await cursor.fetchone()
         if row is not None and row[0] is False:
             raise QueueError("PGMQ archive was rejected")
+
+    async def _fetchone(
+        self,
+        query: str,
+        params: tuple[object, ...],
+    ) -> Sequence[Any] | None:
+        connection = self._connection
+        if hasattr(connection, "execute"):
+            cursor = await cast(DatabaseConnection, connection).execute(query, params)
+            return await cursor.fetchone()
+        provider = connection
+        async with provider() as managed_connection:
+            async with managed_connection.transaction():
+                cursor = await managed_connection.execute(query, params)
+                return await cursor.fetchone()
 
 
 def _datetime(value: Any) -> datetime:
