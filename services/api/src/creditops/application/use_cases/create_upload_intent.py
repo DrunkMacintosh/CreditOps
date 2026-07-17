@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from creditops.application.ports.repositories import UploadIntentRecord
+from creditops.application.ports.repositories import AuditEvent, UploadIntentRecord
 from creditops.application.ports.storage import StoragePort, UploadAuthorization
 from creditops.application.unit_of_work import ActorContext, UnitOfWorkFactory
 from creditops.application.use_cases.create_case import INTAKE_OFFICER_ROLE
@@ -120,5 +120,22 @@ class CreateUploadIntent:
                 bucket_id="creditops-incoming",
                 object_key=object_key,
                 expires_at=expires_at,
+            )
+            await uow.audit.append(
+                AuditEvent(
+                    case_id=case.id,
+                    case_version=case.version,
+                    event_type="UPLOAD_INTENT_CREATED",
+                    actor_id=actor.actor_id,
+                    artifact_type="UPLOAD_INTENT",
+                    artifact_id=intent.id,
+                    event_data={
+                        "fileName": intent.original_filename,
+                        "contentType": intent.accepted_content_type,
+                        "sizeBytes": intent.declared_size_bytes,
+                        "mode": authorization.mode,
+                    },
+                    request_id=actor.request_id,
+                )
             )
             return CreatedUploadIntent(intent=intent, authorization=authorization)

@@ -273,6 +273,21 @@ class CompleteUploadIntent:
                     consumed_at=self._now(),
                     completion_idempotency_record_id=existing.id,
                 )
+                await uow.audit.append(
+                    AuditEvent(
+                        case_id=fresh_intent.case_id,
+                        case_version=fresh_intent.case_version,
+                        event_type="UPLOAD_DUPLICATE_DETECTED",
+                        actor_id=actor.actor_id,
+                        artifact_type="UPLOAD_INTENT",
+                        artifact_id=fresh_intent.id,
+                        event_data={
+                            "duplicateOfDocumentId": str(duplicate_id),
+                            "contentSha256": content_sha256,
+                        },
+                        request_id=actor.request_id,
+                    )
+                )
                 return duplicate_result
             registration = await uow.uploads.register_verified_upload(
                 intent=fresh_intent,

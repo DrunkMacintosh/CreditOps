@@ -90,3 +90,27 @@ async def test_untrusted_signed_url_is_rejected() -> None:
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
         )
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_signed_url_for_a_different_object_is_rejected() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "url": "/storage/v1/object/upload/sign/creditops-incoming/incoming/other"
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = SupabaseStorage(settings(), client=client)
+    with pytest.raises(StorageError):
+        await adapter.create_upload_authorization(
+            bucket_id="creditops-incoming",
+            object_key="incoming/case/intent",
+            content_type="application/pdf",
+            size_bytes=100,
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        )
+    await client.aclose()

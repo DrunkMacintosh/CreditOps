@@ -20,6 +20,7 @@ def test_upload_migration_provisions_private_bounded_buckets_fail_closed() -> No
     assert "existing_public" in sql
     assert "104857600" in sql
     assert "allowed_mime_types" in sql
+    assert "declared_size_bytes <= 104857600" in sql
 
 
 def test_upload_migration_links_consumption_to_completed_idempotency() -> None:
@@ -28,6 +29,8 @@ def test_upload_migration_links_consumption_to_completed_idempotency() -> None:
     assert "references public.idempotency_records(id)" in sql
     assert "completed_at is not null" in sql
     assert "upload_intents_consumed_status_check" in sql
+    assert "elsif new.status = 'consumed'" in sql
+    assert "elsif new.status <> 'open'" not in sql
 
 
 def test_api_writes_are_not_granted_to_browser_roles() -> None:

@@ -4,7 +4,7 @@ import base64
 import hashlib
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 
 import httpx
 
@@ -137,6 +137,11 @@ class SupabaseStorage(StoragePort):
         resolved_parts = urlsplit(resolved)
         if resolved_parts.hostname != trusted.hostname or resolved_parts.scheme != trusted.scheme:
             raise StorageError("Storage authorization URL is not trusted")
+        expected_sign_path = (
+            f"/storage/v1/object/upload/sign/{bucket_id}/{object_key}"
+        )
+        if unquote(resolved_parts.path) != expected_sign_path:
+            raise StorageError("Storage authorization URL is not bound to the requested object")
 
         if size_bytes < _TUS_CHUNK_THRESHOLD:
             return UploadAuthorization(

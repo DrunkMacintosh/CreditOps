@@ -31,8 +31,10 @@ insert into public.upload_intents (
   assigned_officer_id,
   bucket_id,
   object_key,
+  original_filename,
   accepted_content_type,
   size_ceiling,
+  declared_size_bytes,
   expires_at
 )
 values
@@ -43,7 +45,9 @@ values
     '00000000-0000-0000-0000-000000000001',
     'creditops-incoming',
     'incoming/10000000-0000-0000-0000-000000000001/20000000-0000-0000-0000-000000000001',
+    'statement.pdf',
     'application/pdf',
+    1048576,
     1048576,
     clock_timestamp() + interval '5 minutes'
   ),
@@ -54,7 +58,9 @@ values
     '00000000-0000-0000-0000-000000000001',
     'creditops-incoming',
     'incoming/10000000-0000-0000-0000-000000000001/20000000-0000-0000-0000-000000000002',
+    'statement.pdf',
     'application/pdf',
+    1048576,
     1048576,
     clock_timestamp() - interval '1 minute'
   ),
@@ -65,7 +71,9 @@ values
     '00000000-0000-0000-0000-000000000001',
     'creditops-incoming',
     'incoming/10000000-0000-0000-0000-000000000001/20000000-0000-0000-0000-000000000003',
+    'statement.pdf',
     'application/pdf',
+    1048576,
     1048576,
     clock_timestamp() + interval '5 minutes'
   );

@@ -74,7 +74,9 @@ alter table public.upload_intents
     and original_filename !~ '[\\/\x00-\x1F\x7F]'
   ),
   add constraint upload_intents_declared_size_exact check (
-    declared_size_bytes = size_ceiling and declared_size_bytes > 0
+    declared_size_bytes = size_ceiling
+    and declared_size_bytes > 0
+    and declared_size_bytes <= 104857600
   );
 
 create or replace function public.protect_upload_intent_identity()
@@ -106,10 +108,17 @@ begin
       or new.completion_idempotency_record_id is distinct from old.completion_idempotency_record_id then
       raise exception using errcode = '42501', message = 'consumed upload intent is immutable';
     end if;
-  elsif new.status <> 'OPEN'
-    or new.completion_idempotency_record_id is not null
-    or (new.consumed_at is not null and new.consumed_at < old.created_at) then
+  elsif new.status = 'OPEN' then
+    if new.consumed_at is not null or new.completion_idempotency_record_id is not null then
       raise exception using errcode = '23514', message = 'invalid upload intent consumption';
+    end if;
+  elsif new.status = 'CONSUMED' then
+    if new.consumed_at is null or new.completion_idempotency_record_id is null
+      or new.consumed_at < old.created_at then
+      raise exception using errcode = '23514', message = 'invalid upload intent consumption';
+    end if;
+  else
+    raise exception using errcode = '23514', message = 'invalid upload intent consumption';
   end if;
   if new.status = 'CONSUMED' and not exists (
     select 1
