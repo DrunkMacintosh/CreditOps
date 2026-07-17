@@ -35,6 +35,14 @@ class ParsedDocument(BaseModel):
     extraction_method: str = Field(min_length=1)
     parser_version: str = Field(default="deterministic-parser-v1", min_length=1)
 
+    @model_validator(mode="after")
+    def bounded_regions(self) -> ParsedDocument:
+        if len(self.regions) > 50_000:
+            raise ValueError("parsed document has too many regions")
+        if sum(len(region.text) for region in self.regions) > 2_000_000:
+            raise ValueError("parsed document text exceeds the stage limit")
+        return self
+
 
 class DocumentParser(Protocol):
     def parse(self, document_version_id: UUID, document: SecureDocument) -> ParsedDocument: ...

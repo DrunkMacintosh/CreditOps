@@ -80,6 +80,10 @@ class _Parser:
 
 
 class _Gateway:
+    def __init__(self, case_id: object, document_version_id: object) -> None:
+        self.case_id = case_id
+        self.document_version_id = document_version_id
+
     async def extract_kie(self, request: object) -> InferenceResult:
         candidate = {
             "field_key": "requested_amount",
@@ -94,7 +98,8 @@ class _Gateway:
         return InferenceResult(
             capability="kie",
             provider="FPT",
-            case_id=uuid4(),
+            case_id=self.case_id,  # type: ignore[arg-type]
+            document_version_id=self.document_version_id,  # type: ignore[arg-type]
             endpoint_id="kie-1",
             model_id="kie-gated",
             payload={"candidates": [candidate]},
@@ -110,7 +115,8 @@ class _Gateway:
         return InferenceResult(
             capability="embedding",
             provider="FPT",
-            case_id=uuid4(),
+            case_id=self.case_id,  # type: ignore[arg-type]
+            document_version_id=self.document_version_id,  # type: ignore[arg-type]
             endpoint_id="embedding-1",
             model_id="embedding-gated",
             payload=[(0.1, 0.2)],
@@ -133,7 +139,7 @@ async def test_pipeline_wires_parser_to_fpt_and_returns_only_candidates() -> Non
         file_name="don_de_nghi_cap_tin_dung.pdf",
         document=validate_document_bytes(b"%PDF-1.7", content_type="application/pdf"),
         correlation_id="corr",
-        gateway=_Gateway(),  # type: ignore[arg-type]
+        gateway=_Gateway(case_id, version_id),  # type: ignore[arg-type]
         parser=_Parser(),  # type: ignore[arg-type]
         expected_embedding_dimension=2,
     )

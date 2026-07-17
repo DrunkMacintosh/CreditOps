@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from creditops.application.ports.model_gateway import (
     EmbeddingRequest,
     InferenceGateway,
+    InferenceResult,
     KIERequest,
     TableRequest,
     VisionRequest,
@@ -53,6 +54,11 @@ def _candidate_payload(payload: Any) -> list[ExtractionCandidate]:
         raise ValueError("FPT extraction candidates are invalid") from exc
 
 
+def _assert_scope(result: InferenceResult, case_id: UUID, document_version_id: UUID) -> None:
+    if result.case_id != case_id or result.document_version_id != document_version_id:
+        raise ValueError("FPT result scope does not match the current document version")
+
+
 async def process_document(
     *,
     case_id: UUID,
@@ -73,8 +79,12 @@ async def process_document(
     parsed = parse_document(document_version_id, document, parser=parser)
     classification = classify_document(file_name=file_name, parsed=parsed)
     source_text = "\n".join(region.text for region in parsed.regions)
+    if len(source_text) > 200_000:
+        raise ValueError("parsed document text exceeds the model input limit")
     schema = extraction_schema(classification.family)
     if document.content_type in {"image/jpeg", "image/png"}:
+        if len(document.content) > 15 * 1024 * 1024:
+            raise ValueError("image exceeds the bounded vision input limit")
         response = await gateway.inspect_vision(
             VisionRequest(
                 correlation_id=correlation_id,
@@ -107,6 +117,7 @@ async def process_document(
                 response_schema=schema,
             )
         )
+    _assert_scope(response, case_id, document_version_id)
     candidates = tuple(validate_candidates(_candidate_payload(response.payload), parsed))
     texts = [region.text for region in parsed.regions]
     passages: list[IndexedPassage] = []
@@ -120,6 +131,7 @@ async def process_document(
                 expected_dimension=expected_embedding_dimension,
             )
         )
+        _assert_scope(embedding_response, case_id, document_version_id)
         vectors = embedding_response.payload
         if not isinstance(vectors, list) or len(vectors) != len(parsed.regions):
             raise ValueError("FPT embedding output count does not match parsed regions")
