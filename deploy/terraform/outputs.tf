@@ -51,6 +51,7 @@ module "iam" {
   project_id                   = var.project_id
   api_secret_ids               = toset([for ref in values(var.api_secret_refs) : ref.secret_id])
   worker_secret_ids            = toset([for ref in values(var.worker_secret_refs) : ref.secret_id])
+  worker_runtime_ready        = var.worker_runtime_ready
   web_identity_pool_id         = var.web_identity_pool_id
   web_identity_provider_id     = var.web_identity_provider_id
   vercel_team_slug             = var.vercel_team_slug

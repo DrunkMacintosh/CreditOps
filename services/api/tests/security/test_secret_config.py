@@ -69,6 +69,15 @@ def test_worker_and_scheduler_contracts_are_single_task_oauth_calls() -> None:
     assert re.search(r"count\s*=\s*var\.worker_runtime_ready\s*\?\s*1\s*:\s*0", terraform)
 
 
+def test_worker_secret_access_is_gated_until_runtime_is_ready() -> None:
+    terraform = _terraform()
+
+    assert re.search(
+        r'for_each\s*=\s*var\.worker_runtime_ready\s*\?\s*var\.worker_secret_ids\s*:\s*toset\(\[\]\)',
+        terraform,
+    )
+
+
 def test_unimplemented_operational_metrics_are_deployment_gated_and_scoped() -> None:
     terraform = _terraform()
 
@@ -87,8 +96,19 @@ def test_runtime_secret_names_cannot_override_reserved_environment() -> None:
     for name in ("api_secret_refs", "worker_secret_refs"):
         block = re.search(rf'variable "{name}" \{{(.*?)\n\}}', variables, re.DOTALL)
         assert block is not None
-        for reserved in ("APP_ENV", "DATA_CLASS", "SERVICE_NAME"):
+        for reserved in (
+            "APP_ENV",
+            "DATA_CLASS",
+            "SERVICE_NAME",
+            "PORT",
+            "K_SERVICE",
+            "K_REVISION",
+            "K_CONFIGURATION",
+            "FUNCTION_TARGET",
+            "FUNCTION_SIGNATURE_TYPE",
+        ):
             assert reserved in block.group(1)
+        assert "^[A-Za-z_][A-Za-z0-9_]*$" in block.group(1)
 
 
 def test_runtime_capacity_and_region_variables_have_no_defaults() -> None:

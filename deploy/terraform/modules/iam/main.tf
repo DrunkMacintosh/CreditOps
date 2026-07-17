@@ -13,6 +13,11 @@ variable "worker_secret_ids" {
   type        = set(string)
 }
 
+variable "worker_runtime_ready" {
+  description = "Only grant worker secret access after the durable worker runtime is implemented and verified."
+  type        = bool
+}
+
 variable "web_identity_pool_id" {
   description = "Google Workload Identity Pool ID dedicated to the Vercel web caller."
   type        = string
@@ -107,7 +112,7 @@ resource "google_secret_manager_secret_iam_member" "api" {
 }
 
 resource "google_secret_manager_secret_iam_member" "worker" {
-  for_each = var.worker_secret_ids
+  for_each = var.worker_runtime_ready ? var.worker_secret_ids : toset([])
 
   project   = var.project_id
   secret_id = each.value

@@ -183,9 +183,21 @@ variable "api_secret_refs" {
   validation {
     condition = alltrue([
       for name in keys(var.api_secret_refs) :
-      !contains(["APP_ENV", "DATA_CLASS", "SERVICE_NAME"], upper(name))
+      can(regex("^[A-Za-z_][A-Za-z0-9_]*$", name))
+      && !contains([
+        "APP_ENV",
+        "DATA_CLASS",
+        "SERVICE_NAME",
+        "PORT",
+        "K_SERVICE",
+        "K_REVISION",
+        "K_CONFIGURATION",
+        "FUNCTION_TARGET",
+        "FUNCTION_SIGNATURE_TYPE",
+      ], upper(name))
+      && !startswith(upper(name), "X_GOOGLE_")
     ])
-    error_message = "API secrets cannot override APP_ENV, DATA_CLASS, or SERVICE_NAME."
+    error_message = "API secret keys must be valid environment names and cannot override reserved Cloud Run/application variables."
   }
 }
 
@@ -206,9 +218,21 @@ variable "worker_secret_refs" {
   validation {
     condition = alltrue([
       for name in keys(var.worker_secret_refs) :
-      !contains(["APP_ENV", "DATA_CLASS", "SERVICE_NAME"], upper(name))
+      can(regex("^[A-Za-z_][A-Za-z0-9_]*$", name))
+      && !contains([
+        "APP_ENV",
+        "DATA_CLASS",
+        "SERVICE_NAME",
+        "PORT",
+        "K_SERVICE",
+        "K_REVISION",
+        "K_CONFIGURATION",
+        "FUNCTION_TARGET",
+        "FUNCTION_SIGNATURE_TYPE",
+      ], upper(name))
+      && !startswith(upper(name), "X_GOOGLE_")
     ])
-    error_message = "Worker secrets cannot override APP_ENV, DATA_CLASS, or SERVICE_NAME."
+    error_message = "Worker secret keys must be valid environment names and cannot override reserved Cloud Run/application variables."
   }
 }
 

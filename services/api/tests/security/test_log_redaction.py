@@ -95,6 +95,23 @@ def test_aws_security_tokens_and_url_fragments_are_redacted() -> None:
     assert "safe=yes" in endpoint
 
 
+def test_relative_access_targets_and_non_http_dsn_values_are_redacted() -> None:
+    cleaned = LogRedactor().clean(
+        {
+            "message": (
+                "GET /storage/v1/object/sign/private.pdf?"
+                "X-Amz-Security-Token=session-secret&business_id=customer-42&limit=20"
+            ),
+            "error": "postgresql://db-user:db-password@db.internal:5432/creditops",
+        }
+    )
+
+    assert "session-secret" not in cleaned["message"]
+    assert "customer-42" not in cleaned["message"]
+    assert "limit=20" in cleaned["message"]
+    assert "db-password" not in cleaned["error"]
+
+
 def test_structured_formatter_redacts_context_and_exception_text() -> None:
     formatter = StructuredJsonFormatter(service_name="creditops-api")
     record = logging.LogRecord(

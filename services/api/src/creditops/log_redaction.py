@@ -25,11 +25,17 @@ _SENSITIVE_KEYS = frozenset(
         "token",
     }
 )
+_SAFE_QUERY_KEYS = frozenset({"cache", "format", "limit", "offset", "page", "safe"})
 _BEARER_PATTERN = re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+")
 _AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\b(Authorization\s*[:=]\s*)(?!\[REDACTED\])[^\s,;]+(?:\s+[^\s,;]+)?"
 )
-_URL_PATTERN = re.compile(r"https?://[^\s\]\[\"'<>]+")
+_URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\]\[\"'<>]+", re.IGNORECASE)
+_REQUEST_TARGET_PATTERN = re.compile(
+    r"(?P<prefix>\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+)"
+    r"(?P<target>/[^\s]+)",
+    re.IGNORECASE,
+)
 
 
 def _normalized_key(key: object) -> str:
@@ -66,7 +72,12 @@ def _redact_url(match: re.Match[str]) -> str:
         netloc = f"{REDACTED}@{hostname}" if parsed.username or parsed.password else hostname
         query = urlencode(
             [
-                (key, REDACTED if _is_sensitive_query_key(key) else value)
+                (
+                    key,
+                    value
+                    if key.lower() in _SAFE_QUERY_KEYS and not _is_sensitive_query_key(key)
+                    else REDACTED,
+                )
                 for key, value in parse_qsl(parsed.query, keep_blank_values=True)
             ]
         )
@@ -76,10 +87,31 @@ def _redact_url(match: re.Match[str]) -> str:
         return REDACTED
 
 
+def _redact_request_target(match: re.Match[str]) -> str:
+    raw_target = match.group("target")
+    try:
+        parsed = urlsplit(raw_target)
+        query = urlencode(
+            [
+                (
+                    key,
+                    value
+                    if key.lower() in _SAFE_QUERY_KEYS and not _is_sensitive_query_key(key)
+                    else REDACTED,
+                )
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
+        )
+        return f"{match.group('prefix')}{urlunsplit(('', '', parsed.path, query, ''))}"
+    except ValueError:
+        return f"{match.group('prefix')}{REDACTED}"
+
+
 def _redact_string(value: str) -> str:
     value = _BEARER_PATTERN.sub(rf"\1{REDACTED}", value)
     value = _AUTHORIZATION_PATTERN.sub(rf"\1{REDACTED}", value)
-    return _URL_PATTERN.sub(_redact_url, value)
+    value = _URL_PATTERN.sub(_redact_url, value)
+    return _REQUEST_TARGET_PATTERN.sub(_redact_request_target, value)
 
 
 class LogRedactor:
