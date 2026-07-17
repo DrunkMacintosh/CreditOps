@@ -69,6 +69,7 @@ async def test_large_upload_returns_signed_tus_metadata_and_no_admin_header() ->
     assert result.headers["x-signature"] == "short-lived-signature"
     assert "bucketName" in result.headers["Upload-Metadata"]
     assert "objectName" in result.headers["Upload-Metadata"]
+    assert "contentType" in result.headers["Upload-Metadata"]
     assert "Authorization" not in result.headers
     await client.aclose()
 

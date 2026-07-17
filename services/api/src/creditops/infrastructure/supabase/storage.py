@@ -159,7 +159,7 @@ class SupabaseStorage(StoragePort):
             (
                 f"bucketName {self._b64(bucket_id)}",
                 f"objectName {self._b64(object_key)}",
-                f"filetype {self._b64(content_type)}",
+                f"contentType {self._b64(content_type)}",
             )
         )
         return UploadAuthorization(
