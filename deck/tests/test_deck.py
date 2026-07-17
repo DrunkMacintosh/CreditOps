@@ -46,3 +46,34 @@ def test_every_footer_has_product_name(prs):
 def test_speaker_notes_written(prs):
     slides = list(prs.slides)
     assert "chuẩn bị" in slides[0].notes_slide.notes_text_frame.text
+
+
+def names(slide):
+    return [s.name for s in slide.shapes]
+
+
+def test_hook_slide_has_doc_wall(prs):
+    slide = list(prs.slides)[0]
+    assert names(slide).count("doc_thumb") == 12
+    assert "Minh An" in slide_text(slide)
+
+
+def test_product_slide_roles_and_placeholder(prs):
+    slide = list(prs.slides)[3]
+    assert names(slide).count("role_box") == 6
+    assert "hub" in names(slide)
+    assert "screenshot_placeholder" in names(slide)
+
+
+def test_before_after_columns(prs):
+    slide = list(prs.slides)[4]
+    ns = names(slide)
+    assert "col_before" in ns and "col_after" in ns
+    assert ns.count("time_bar") == 2
+    assert "NHIỀU TUẦN" in slide_text(slide) and "VÀI NGÀY" in slide_text(slide)
+
+
+def test_storyboard_six_cards(prs):
+    slide = list(prs.slides)[5]
+    assert names(slide).count("story_card") == 6
+    assert "screenshot_placeholder" in names(slide)
