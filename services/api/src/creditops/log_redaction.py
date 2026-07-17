@@ -25,21 +25,6 @@ _SENSITIVE_KEYS = frozenset(
         "token",
     }
 )
-_SENSITIVE_QUERY_KEYS = frozenset(
-    {
-        "access_token",
-        "apikey",
-        "api_key",
-        "key",
-        "signature",
-        "sig",
-        "token",
-        "x-amz-credential",
-        "x-amz-signature",
-        "x-goog-credential",
-        "x-goog-signature",
-    }
-)
 _BEARER_PATTERN = re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+")
 _AUTHORIZATION_PATTERN = re.compile(
     r"(?i)\b(Authorization\s*[:=]\s*)(?!\[REDACTED\])[^\s,;]+(?:\s+[^\s,;]+)?"
@@ -63,6 +48,14 @@ def _is_sensitive_key(key: object) -> bool:
     )
 
 
+def _is_sensitive_query_key(key: str) -> bool:
+    normalized = _normalized_key(key)
+    return normalized.endswith(("credential", "key", "signature", "token")) or any(
+        marker in normalized
+        for marker in ("authorization", "cookie", "password", "privatekey", "secret")
+    )
+
+
 def _redact_url(match: re.Match[str]) -> str:
     raw_url = match.group(0)
     try:
@@ -73,11 +66,12 @@ def _redact_url(match: re.Match[str]) -> str:
         netloc = f"{REDACTED}@{hostname}" if parsed.username or parsed.password else hostname
         query = urlencode(
             [
-                (key, REDACTED if key.lower() in _SENSITIVE_QUERY_KEYS else value)
+                (key, REDACTED if _is_sensitive_query_key(key) else value)
                 for key, value in parse_qsl(parsed.query, keep_blank_values=True)
             ]
         )
-        return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+        fragment = REDACTED if parsed.fragment else ""
+        return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
     except ValueError:
         return REDACTED
 

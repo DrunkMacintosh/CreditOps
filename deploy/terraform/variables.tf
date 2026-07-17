@@ -85,6 +85,75 @@ variable "worker_timeout_seconds" {
   type        = number
 }
 
+variable "worker_runtime_ready" {
+  description = "Fail-closed deployment gate. Keep false until the worker has a tested durable queue sweep; current worker exits non-zero."
+  type        = bool
+  default     = false
+}
+
+variable "web_identity_pool_id" {
+  description = "Dedicated Google Workload Identity Pool ID for the Vercel caller."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{3,30}[a-z0-9]$", var.web_identity_pool_id))
+    error_message = "web_identity_pool_id must be a valid 5-32 character Google pool ID."
+  }
+}
+
+variable "web_identity_provider_id" {
+  description = "OIDC provider ID within the dedicated web identity pool."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{3,30}[a-z0-9]$", var.web_identity_provider_id))
+    error_message = "web_identity_provider_id must be a valid 5-32 character Google provider ID."
+  }
+}
+
+variable "vercel_team_slug" {
+  description = "Exact Vercel team slug used to derive both OIDC issuer and audience."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]*[a-z0-9]$", var.vercel_team_slug))
+    error_message = "vercel_team_slug must contain only lower-case letters, digits, and internal hyphens."
+  }
+}
+
+variable "web_oidc_subject" {
+  description = "Exact approved Vercel subject: owner:<team>:project:<project>:environment:<environment>."
+  type        = string
+
+  validation {
+    condition = can(regex(
+      "^owner:[A-Za-z0-9_-]+:project:[A-Za-z0-9_.-]+:environment:[A-Za-z0-9_-]+$",
+      var.web_oidc_subject,
+    )) && startswith(var.web_oidc_subject, "owner:${var.vercel_team_slug}:")
+    error_message = "web_oidc_subject must safely identify one exact deployment owned by vercel_team_slug."
+  }
+}
+
+variable "operational_metrics_ready" {
+  description = "Fail-closed gate. Keep false until application and worker code emit every documented operational event."
+  type        = bool
+  default     = false
+}
+
+variable "additional_api_invoker_members" {
+  description = "Optional named Google IAM members for smoke/operations access; never public principals."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for member in var.additional_api_invoker_members :
+      can(regex("^(serviceAccount|user|group):[^[:space:]]+$", member))
+    ])
+    error_message = "Additional API invokers must be explicit serviceAccount:, user:, or group: members."
+  }
+}
+
 variable "scheduler_schedule" {
   description = "Recovery-sweep cron schedule."
   type        = string
@@ -110,6 +179,14 @@ variable "api_secret_refs" {
     ])
     error_message = "Every API secret reference must use a positive numeric version, never latest."
   }
+
+  validation {
+    condition = alltrue([
+      for name in keys(var.api_secret_refs) :
+      !contains(["APP_ENV", "DATA_CLASS", "SERVICE_NAME"], upper(name))
+    ])
+    error_message = "API secrets cannot override APP_ENV, DATA_CLASS, or SERVICE_NAME."
+  }
 }
 
 variable "worker_secret_refs" {
@@ -124,6 +201,14 @@ variable "worker_secret_refs" {
       for ref in values(var.worker_secret_refs) : can(regex("^[1-9][0-9]*$", ref.version))
     ])
     error_message = "Every worker secret reference must use a positive numeric version, never latest."
+  }
+
+  validation {
+    condition = alltrue([
+      for name in keys(var.worker_secret_refs) :
+      !contains(["APP_ENV", "DATA_CLASS", "SERVICE_NAME"], upper(name))
+    ])
+    error_message = "Worker secrets cannot override APP_ENV, DATA_CLASS, or SERVICE_NAME."
   }
 }
 

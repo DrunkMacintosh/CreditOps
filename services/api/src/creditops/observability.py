@@ -37,7 +37,7 @@ class StructuredJsonFormatter(logging.Formatter):
 
 
 def configure_structured_logging(*, service_name: str, level: str = "INFO") -> None:
-    """Replace root handlers with the service's redacting structured handler."""
+    """Route application and server logs through one redacting JSON handler."""
 
     handler = logging.StreamHandler()
     handler.setFormatter(StructuredJsonFormatter(service_name=service_name))
@@ -45,6 +45,11 @@ def configure_structured_logging(*, service_name: str, level: str = "INFO") -> N
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
+        logger = logging.getLogger(logger_name)
+        logger.handlers.clear()
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = True
 
 
 def log_event(

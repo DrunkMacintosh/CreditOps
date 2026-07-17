@@ -22,7 +22,14 @@ variable "time_zone" {
   type = string
 }
 
+variable "worker_runtime_ready" {
+  description = "Fail-closed gate; false until the worker performs a real durable queue sweep."
+  type        = bool
+}
+
 resource "google_cloud_scheduler_job" "worker_recovery" {
+  count = var.worker_runtime_ready ? 1 : 0
+
   project          = var.project_id
   region           = var.region
   name             = "creditops-worker-recovery"
@@ -56,5 +63,5 @@ resource "google_cloud_scheduler_job" "worker_recovery" {
 }
 
 output "scheduler_job_name" {
-  value = google_cloud_scheduler_job.worker_recovery.name
+  value = try(google_cloud_scheduler_job.worker_recovery[0].name, null)
 }

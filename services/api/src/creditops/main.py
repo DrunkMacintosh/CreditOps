@@ -22,6 +22,8 @@ from creditops.application.unit_of_work import UnitOfWorkFactory
 from creditops.config import Settings
 from creditops.infrastructure.postgres.repositories import PostgresUnitOfWorkFactory
 from creditops.infrastructure.postgres.session import PsycopgConnectionFactory
+from creditops.observability import configure_structured_logging
+from creditops.security_headers import SecurityHeadersMiddleware
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -36,7 +38,14 @@ def create_app(
     if configured.app_env != "test" and (jwt_verifier is not None or uow_factory is not None):
         raise ValueError("Dependency injection overrides are available only in APP_ENV=test")
 
+    if configured.app_env != "test":
+        configure_structured_logging(
+            service_name=configured.service_name,
+            level=configured.log_level,
+        )
+
     application = FastAPI(title="SHB CreditOps EvidenceGraph", version="0.1.0")
+    application.add_middleware(SecurityHeadersMiddleware)
     application.add_exception_handler(
         ApiException,
         cast(ExceptionHandler, api_exception_handler),

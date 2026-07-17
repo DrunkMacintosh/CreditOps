@@ -26,7 +26,7 @@ resource "google_logging_metric" "manual_review_growth" {
   project     = var.project_id
   name        = "creditops_manual_review_created"
   description = "Count of synthetic-case tasks newly routed to manual review."
-  filter      = "jsonPayload.event=\"manual_review_created\""
+  filter      = "jsonPayload.service=\"creditops-worker\" AND jsonPayload.event=\"manual_review_created\""
 
   metric_descriptor {
     metric_kind = "DELTA"
@@ -39,7 +39,7 @@ resource "google_logging_metric" "dispatch_failure" {
   project     = var.project_id
   name        = "creditops_worker_dispatch_failure"
   description = "Count of failed API or Scheduler worker dispatch requests."
-  filter      = "jsonPayload.event=\"worker_dispatch_failed\""
+  filter      = "jsonPayload.service=\"creditops-api\" AND jsonPayload.event=\"worker_dispatch_failed\""
 
   metric_descriptor {
     metric_kind = "DELTA"
@@ -52,7 +52,7 @@ resource "google_logging_metric" "queue_age" {
   project         = var.project_id
   name            = "creditops_queue_age_seconds"
   description     = "Oldest eligible synthetic queue item age reported by recovery sweeps."
-  filter          = "jsonPayload.event=\"queue_age_observed\""
+  filter          = "jsonPayload.service=\"creditops-worker\" AND jsonPayload.event=\"queue_age_observed\""
   value_extractor = "EXTRACT(jsonPayload.queue_age_seconds)"
 
   metric_descriptor {
@@ -66,7 +66,7 @@ resource "google_logging_metric" "provider_failure" {
   project     = var.project_id
   name        = "creditops_provider_failure"
   description = "Count of validated provider-call failures; alert uses its aligned event rate."
-  filter      = "jsonPayload.event=\"provider_request_failed\""
+  filter      = "jsonPayload.service=\"creditops-worker\" AND jsonPayload.event=\"provider_request_failed\""
 
   metric_descriptor {
     metric_kind = "DELTA"

@@ -66,6 +66,14 @@ variable "scheduler_service_account" {
   type = string
 }
 
+variable "api_invoker_members" {
+  type = set(string)
+}
+
+variable "worker_runtime_ready" {
+  type = bool
+}
+
 variable "api_secret_refs" {
   type = map(object({
     secret_id = string
@@ -227,10 +235,10 @@ resource "google_cloud_run_v2_job" "worker" {
 }
 
 resource "google_cloud_run_v2_job_iam_member" "invoker" {
-  for_each = toset([
+  for_each = var.worker_runtime_ready ? toset([
     var.api_service_account,
     var.scheduler_service_account,
-  ])
+  ]) : toset([])
 
   project  = var.project_id
   location = var.region
@@ -239,11 +247,21 @@ resource "google_cloud_run_v2_job_iam_member" "invoker" {
   member   = "serviceAccount:${each.value}"
 }
 
+resource "google_cloud_run_v2_service_iam_member" "api_invoker" {
+  for_each = var.api_invoker_members
+
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.api.name
+  role     = "roles/run.invoker"
+  member   = each.value
+}
+
 output "api_uri" {
-  value = google_cloud_run_v2_service.api.uri
+  value      = google_cloud_run_v2_service.api.uri
+  depends_on = [google_cloud_run_v2_service_iam_member.api_invoker]
 }
 
 output "worker_job_name" {
-  value      = google_cloud_run_v2_job.worker.name
-  depends_on = [google_cloud_run_v2_job_iam_member.invoker]
+  value = google_cloud_run_v2_job.worker.name
 }

@@ -3,19 +3,20 @@ from __future__ import annotations
 import json
 import logging
 
+from fastapi.testclient import TestClient
 from starlette.responses import Response
 
+from creditops.config import Settings
 from creditops.log_redaction import LogRedactor
-from creditops.observability import StructuredJsonFormatter
+from creditops.main import create_app
+from creditops.observability import StructuredJsonFormatter, configure_structured_logging
 from creditops.security_headers import apply_security_headers
 
 
 def test_signed_urls_and_tokens_are_redacted() -> None:
     redactor = LogRedactor()
 
-    event = redactor.clean(
-        {"authorization": "Bearer secret", "signedUrl": "https://storage/token"}
-    )
+    event = redactor.clean({"authorization": "Bearer secret", "signedUrl": "https://storage/token"})
 
     assert event == {"authorization": "[REDACTED]", "signedUrl": "[REDACTED]"}
 
@@ -72,6 +73,28 @@ def test_embedded_bearer_and_url_credentials_are_redacted() -> None:
     assert "safe=yes" in cleaned["endpoint"]
 
 
+def test_aws_security_tokens_and_url_fragments_are_redacted() -> None:
+    cleaned = LogRedactor().clean(
+        {
+            "endpoint": (
+                "https://objects.example.test/document.pdf?"
+                "X-Amz-Algorithm=AWS4-HMAC-SHA256&"
+                "X-Amz-Credential=AKIA_TEST%2Fscope&"
+                "X-Amz-Security-Token=session-secret&"
+                "X-Amz-Signature=signature-secret&safe=yes#access-token-fragment"
+            )
+        }
+    )
+
+    endpoint = cleaned["endpoint"]
+    assert isinstance(endpoint, str)
+    assert "AKIA_TEST" not in endpoint
+    assert "session-secret" not in endpoint
+    assert "signature-secret" not in endpoint
+    assert "access-token-fragment" not in endpoint
+    assert "safe=yes" in endpoint
+
+
 def test_structured_formatter_redacts_context_and_exception_text() -> None:
     formatter = StructuredJsonFormatter(service_name="creditops-api")
     record = logging.LogRecord(
@@ -118,6 +141,30 @@ def test_structured_context_cannot_replace_log_envelope() -> None:
     assert payload["message"] == "expected message"
 
 
+def test_structured_logging_replaces_named_server_handlers() -> None:
+    logger_names = ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi")
+    original = {
+        name: (list(logging.getLogger(name).handlers), logging.getLogger(name).propagate)
+        for name in logger_names
+    }
+    try:
+        for name in logger_names:
+            logging.getLogger(name).addHandler(logging.NullHandler())
+            logging.getLogger(name).propagate = False
+
+        configure_structured_logging(service_name="creditops-api")
+
+        for name in logger_names:
+            logger = logging.getLogger(name)
+            assert logger.handlers == []
+            assert logger.propagate is True
+    finally:
+        for name, (handlers, propagate) in original.items():
+            logger = logging.getLogger(name)
+            logger.handlers = handlers
+            logger.propagate = propagate
+
+
 def test_security_headers_are_fail_closed() -> None:
     response = apply_security_headers(Response())
 
@@ -130,3 +177,14 @@ def test_security_headers_are_fail_closed() -> None:
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Referrer-Policy"] == "no-referrer"
     assert response.headers["Permissions-Policy"] == "camera=(), microphone=(), geolocation=()"
+
+
+def test_fastapi_installs_security_headers_middleware() -> None:
+    app = create_app(settings=Settings(app_env="test"))
+
+    response = TestClient(app).get("/api/v1/health")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
