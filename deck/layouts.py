@@ -1,5 +1,6 @@
 """Layout renderers — one render function per layout type, dispatched via RENDERERS."""
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches
 
 from deck import builders, content, theme
@@ -19,21 +20,24 @@ def render_standard(prs, spec):
 
 def render_hook(prs, spec):
     slide = builders.add_blank(prs)
-    builders.add_title(slide, spec)
+    builders.paint_bg(slide, theme.DEEP_BLUE)
+    builders.add_title(slide, spec, color=theme.WHITE)
     x = spec["extra"]
     builders.box(slide, Inches(0.7), Inches(2.0), Inches(5.4), Inches(2.2),
-                 x["quote"], theme.DEEP_BLUE, size=theme.KILLER_SIZE, name="quote")
+                 x["quote"], theme.WHITE, text_color=theme.DEEP_BLUE,
+                 size=theme.KILLER_SIZE, bold=True, italic=True,
+                 align=PP_ALIGN.LEFT, name="quote")
     builders.tb(slide, Inches(0.7), Inches(4.3), Inches(5.4), Inches(0.5),
-                x["quote_by"], size=theme.SMALL_SIZE, color=theme.GRAY)
+                x["quote_by"], size=theme.SMALL_SIZE, color=theme.ICE_TEXT)
     for i, label in enumerate(x["doc_labels"]):
         row, col = divmod(i, 3)
         builders.box(slide,
                      Inches(6.8) + col * Inches(2.1),
                      Inches(1.7) + row * Inches(1.15),
                      Inches(1.95), Inches(1.0),
-                     label, theme.LIGHT_GRAY, text_color=theme.DARK_TEXT,
-                     name="doc_thumb")
-    builders.add_footer(slide, spec)
+                     label, theme.ICE, text_color=theme.DEEP_BLUE,
+                     name="doc_thumb", shape_type=MSO_SHAPE.FOLDED_CORNER)
+    builders.add_footer(slide, spec, dark=True)
     return slide
 
 
@@ -41,21 +45,22 @@ def render_product(prs, spec):
     slide = builders.add_blank(prs)
     builders.add_title(slide, spec)
     x = spec["extra"]
-    builders.tb(slide, Inches(0.5), Inches(1.15), Inches(12.3), Inches(0.6),
-                x["pitch"], size=theme.KILLER_SIZE, color=theme.DARK_TEXT, bold=True)
-    builders.box(slide, Inches(4.4), Inches(3.1), Inches(3.0), Inches(1.3),
-                 x["hub"], theme.ORANGE, name="hub", bold=True)
-    positions = [(1.0, 2.0), (4.4, 1.85), (7.8, 2.0),
-                 (1.0, 4.6), (4.4, 4.75), (7.8, 4.6)]
+    builders.tb(slide, Inches(0.5), Inches(1.45), Inches(12.3), Inches(0.72),
+                x["pitch"], size=theme.KILLER_SIZE, color=theme.SLATE, italic=True)
+    builders.box(slide, Inches(4.4), Inches(3.3), Inches(3.0), Inches(1.15),
+                 x["hub"], theme.ORANGE, text_color=theme.DEEP_BLUE,
+                 name="hub", bold=True)
+    positions = [(1.0, 2.3), (4.4, 2.3), (7.8, 2.3),
+                 (1.0, 4.6), (4.4, 4.6), (7.8, 4.6)]
     for (px, py), role in zip(positions, x["roles"]):
         builders.box(slide, Inches(px), Inches(py), Inches(3.0), Inches(0.85),
                      role, theme.DEEP_BLUE, name="role_box")
-    builders.add_placeholder(slide, Inches(11.0), Inches(1.9), Inches(2.0),
-                             Inches(3.6), x["screenshot"])
+    builders.add_placeholder(slide, Inches(11.0), Inches(2.3), Inches(2.0),
+                             Inches(3.15), x["screenshot"])
     for i, promise in enumerate(x["promises"]):
         builders.box(slide, Inches(0.5) + i * Inches(4.2), Inches(6.15),
-                     Inches(4.0), Inches(0.75), promise, theme.DEEP_BLUE,
-                     name="promise", bold=True)
+                     Inches(4.0), Inches(0.75), promise, theme.ICE,
+                     text_color=theme.DEEP_BLUE, name="promise", bold=True)
     builders.add_footer(slide, spec)
     return slide
 
@@ -65,13 +70,15 @@ def render_before_after(prs, spec):
     builders.add_title(slide, spec)
     x = spec["extra"]
     builders.box(slide, Inches(0.6), Inches(1.35), Inches(6.0), Inches(0.5),
-                 "TRƯỚC", theme.GRAY, name="col_before", bold=True)
+                 "TRƯỚC", theme.SLATE, name="col_before", bold=True)
     builders.box(slide, Inches(6.85), Inches(1.35), Inches(6.0), Inches(0.5),
-                 "SAU", theme.ORANGE, name="col_after", bold=True)
+                 "SAU", theme.ORANGE, text_color=theme.DEEP_BLUE,
+                 name="col_after", bold=True)
     builders.add_bullets(slide, x["before"], Inches(0.6), Inches(2.0),
                          Inches(6.0), Inches(3.2), size=theme.SMALL_SIZE)
     builders.add_bullets(slide, x["after"], Inches(6.85), Inches(2.0),
-                         Inches(6.0), Inches(3.2), size=theme.SMALL_SIZE)
+                         Inches(6.0), Inches(3.2), size=theme.SMALL_SIZE,
+                         color=theme.DARK_TEXT)
     builders.box(slide, Inches(0.6), Inches(5.35), Inches(6.0), Inches(0.5),
                  x["before_bar"], theme.RED, name="time_bar", bold=True)
     builders.box(slide, Inches(6.85), Inches(5.35), Inches(2.4), Inches(0.5),
@@ -91,7 +98,8 @@ def render_storyboard(prs, spec):
                      Inches(0.6) + col * Inches(4.3),
                      Inches(1.5) + row * Inches(2.5),
                      Inches(4.1), Inches(2.3),
-                     f"{i + 1}. {step}", theme.DEEP_BLUE, name="story_card")
+                     f"{i + 1}. {step}", theme.ICE, text_color=theme.DEEP_BLUE,
+                     name="story_card")
     builders.add_placeholder(slide, Inches(0.6), Inches(6.4), Inches(12.3),
                              Inches(0.45), x["screenshot"])
     builders.add_footer(slide, spec)
@@ -105,9 +113,12 @@ def render_curve(prs, spec):
     heights = [Inches(1.0), Inches(1.6), Inches(2.2)]
     xs = [Inches(0.8), Inches(4.0), Inches(9.6)]
     ys = [Inches(4.6), Inches(4.0), Inches(3.4)]
+    fills = [theme.MID_BLUE, theme.DEEP_BLUE, theme.ORANGE]
+    text_colors = [theme.WHITE, theme.WHITE, theme.DEEP_BLUE]
     for i, stage in enumerate(x["stages"]):
         builders.box(slide, xs[i], ys[i], Inches(2.9), heights[i],
-                     stage, theme.DEEP_BLUE, name="stage_box", bold=True)
+                     stage, fills[i], text_color=text_colors[i],
+                     name="stage_box", bold=True)
     builders.box(slide, Inches(7.1), Inches(3.9), Inches(2.3), Inches(1.2),
                  x["gap"], theme.RED, name="gap_box", bold=True)
     builders.add_bullets(slide, spec["bullets"], Inches(0.8), Inches(1.4),
@@ -127,6 +138,7 @@ def render_pipeline(prs, spec):
                      Inches(1.9) + row * Inches(1.9),
                      Inches(3.0), Inches(1.5),
                      step, theme.DEEP_BLUE if row == 0 else theme.ORANGE,
+                     text_color=theme.WHITE if row == 0 else theme.DEEP_BLUE,
                      name="chevron", shape_type=MSO_SHAPE.CHEVRON)
     builders.add_killer(slide, spec["killer"])
     builders.add_footer(slide, spec)
@@ -137,10 +149,15 @@ def render_provenance(prs, spec):
     slide = builders.add_blank(prs)
     builders.add_title(slide, spec)
     x = spec["extra"]
+    last = len(x["chain"]) - 1
     for i, item in enumerate(x["chain"]):
+        is_human_gate = i == last
         builders.box(slide, Inches(0.6), Inches(1.35) + i * Inches(0.72),
-                     Inches(5.6), Inches(0.6), item, theme.DEEP_BLUE,
-                     name="chain_box")
+                     Inches(5.6), Inches(0.6), item,
+                     theme.ORANGE if is_human_gate
+                     else (theme.DEEP_BLUE if i % 2 == 0 else theme.MID_BLUE),
+                     text_color=theme.DEEP_BLUE if is_human_gate else theme.WHITE,
+                     bold=is_human_gate, name="chain_box")
     builders.tb(slide, Inches(6.7), Inches(1.35), Inches(6.1), Inches(0.4),
                 "Cấu trúc một bản ghi khoảng trống:", size=theme.SMALL_SIZE,
                 color=theme.DEEP_BLUE, bold=True)
@@ -162,9 +179,10 @@ def render_grounding(prs, spec):
                      Inches(0.6) + col * Inches(3.0),
                      Inches(1.6) + row * Inches(1.15),
                      Inches(2.85), Inches(1.0),
-                     src, theme.DEEP_BLUE, name="source_box")
+                     src, theme.MID_BLUE, name="source_box")
     builders.box(slide, Inches(7.0), Inches(2.4), Inches(2.6), Inches(1.6),
-                 x["layer"], theme.ORANGE, name="layer_box", bold=True)
+                 x["layer"], theme.ORANGE, text_color=theme.DEEP_BLUE,
+                 name="layer_box", bold=True)
     builders.box(slide, Inches(10.1), Inches(2.0), Inches(2.7), Inches(1.0),
                  x["out"], theme.GREEN, name="out_box")
     builders.box(slide, Inches(10.1), Inches(3.4), Inches(2.7), Inches(1.2),
@@ -181,8 +199,10 @@ def render_architecture(prs, spec):
     x = spec["extra"]
     for i, band in enumerate(x["bands"]):
         builders.box(slide, Inches(0.6), Inches(1.4) + i * Inches(1.0),
-                     Inches(8.6), Inches(0.85), band, theme.DEEP_BLUE,
+                     Inches(8.6), Inches(0.85), band,
+                     theme.DEEP_BLUE if i % 2 == 0 else theme.MID_BLUE,
                      name="band")
+    builders.panel(slide, Inches(9.3), Inches(1.25), Inches(3.6), Inches(3.45))
     builders.tb(slide, Inches(9.5), Inches(1.4), Inches(3.3), Inches(0.4),
                 "Ranh giới tin cậy:", size=theme.SMALL_SIZE,
                 color=theme.DEEP_BLUE, bold=True)
@@ -200,7 +220,10 @@ def _style_table(frame, header_fill, body_size):
     for r, row in enumerate(table.rows):
         for cell in row.cells:
             cell.fill.solid()
-            cell.fill.fore_color.rgb = header_fill if r == 0 else theme.WHITE
+            if r == 0:
+                cell.fill.fore_color.rgb = header_fill
+            else:
+                cell.fill.fore_color.rgb = theme.ICE if r % 2 == 0 else theme.WHITE
             for para in cell.text_frame.paragraphs:
                 for run in para.runs or [para.add_run()]:
                     run.font.name = theme.FONT
@@ -239,11 +262,11 @@ def render_criteria(prs, spec):
     x = spec["extra"]
     _add_table(slide, "criteria_table",
                ["Đề bài yêu cầu", "Chúng tôi có trong demo"], x["rows"],
-               Inches(0.5), Inches(1.35), Inches(12.3), Inches(3.9))
+               Inches(0.5), Inches(1.45), Inches(12.3), Inches(3.85))
     for i, benefit in enumerate(x["benefits"]):
         builders.box(slide, Inches(0.5) + i * Inches(3.15), Inches(5.6),
                      Inches(3.0), Inches(1.0), benefit, theme.ORANGE,
-                     name="benefit")
+                     text_color=theme.DEEP_BLUE, bold=True, name="benefit")
     builders.add_footer(slide, spec)
     return slide
 
@@ -279,10 +302,12 @@ def render_roadmap(prs, spec):
     builders.add_title(slide, spec)
     x = spec["extra"]
     for i, (when, what) in enumerate(x["milestones"]):
-        fill = theme.ORANGE if i == 0 else theme.DEEP_BLUE
+        is_now = i == 0
         builders.box(slide, Inches(0.4) + i * Inches(2.6), Inches(2.2),
-                     Inches(2.45), Inches(2.6), f"{when}\n\n{what}", fill,
-                     name="milestone")
+                     Inches(2.45), Inches(2.6), f"{when}\n\n{what}",
+                     theme.ORANGE if is_now else theme.DEEP_BLUE,
+                     text_color=theme.DEEP_BLUE if is_now else theme.WHITE,
+                     bold=is_now, name="milestone")
     builders.tb(slide, Inches(0.4), Inches(5.3), Inches(12.5), Inches(0.6),
                 x["note"], size=theme.SMALL_SIZE, color=theme.GRAY)
     builders.add_footer(slide, spec)
@@ -296,7 +321,7 @@ def render_team(prs, spec):
         builders.box(slide, Inches(0.4) + i * Inches(2.6), Inches(1.6),
                      Inches(2.45), Inches(3.4),
                      f"{name_}\n{role}\n\n{built}\n{strength}",
-                     theme.DEEP_BLUE, name="member_card")
+                     theme.ICE, text_color=theme.DEEP_BLUE, name="member_card")
     builders.add_killer(slide, spec["killer"])
     builders.add_footer(slide, spec)
     return slide
@@ -304,17 +329,18 @@ def render_team(prs, spec):
 
 def render_closing(prs, spec):
     slide = builders.add_blank(prs)
-    builders.add_title(slide, spec)
+    builders.paint_bg(slide, theme.DEEP_BLUE)
+    builders.add_title(slide, spec, color=theme.WHITE)
     x = spec["extra"]
     for i, cta in enumerate(x["ctas"]):
         builders.box(slide, Inches(0.6), Inches(1.8) + i * Inches(1.1),
-                     Inches(7.6), Inches(0.95), cta, theme.DEEP_BLUE,
-                     name="cta_box")
+                     Inches(7.6), Inches(0.95), cta, theme.ICE,
+                     text_color=theme.DEEP_BLUE, bold=True, name="cta_box")
     qr = builders.add_placeholder(slide, Inches(8.7), Inches(1.8), Inches(4.0),
                                   Inches(3.2), x["qr"])
     qr.name = "qr_placeholder"
-    builders.add_killer(slide, spec["killer"])
-    builders.add_footer(slide, spec)
+    builders.add_killer(slide, spec["killer"], dark=True)
+    builders.add_footer(slide, spec, dark=True)
     return slide
 
 

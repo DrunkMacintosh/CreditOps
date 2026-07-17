@@ -22,7 +22,11 @@ Edit those, rebuild, and visual polish in PowerPoint is never lost copy.
 
        python -m deck.build
        python -m pytest deck/tests
+       python deck/qa_visual.py deck/output/deck.pptx
        Copy-Item deck/output/deck.pptx deck/SHB-CreditOps-EvidenceGraph-pitch.pptx
+
+   `qa_visual.py` flags text that overflows its box (longer real names or
+   metric values can overflow where placeholders fit) and overlapping shapes.
 
 4. In PowerPoint, replace the screenshot placeholders (slides 4, 6, 8) and
    the QR placeholder (slide 18) with real captures — edit ONLY the release

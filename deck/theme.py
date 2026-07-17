@@ -8,6 +8,10 @@ from pptx.dml.color import RGBColor
 
 ORANGE = RGBColor(0xF7, 0x94, 0x1D)
 DEEP_BLUE = RGBColor(0x0B, 0x2D, 0x5B)
+MID_BLUE = RGBColor(0x1F, 0x4E, 0x8C)
+ICE = RGBColor(0xEA, 0xF1, 0xF9)
+ICE_TEXT = RGBColor(0xCA, 0xDC, 0xFC)
+SLATE = RGBColor(0x44, 0x50, 0x63)
 DARK_TEXT = RGBColor(0x1A, 0x1A, 0x1A)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 GRAY = RGBColor(0x8A, 0x8A, 0x8A)
@@ -24,7 +28,7 @@ TITLE_SIZE = Pt(28)
 KILLER_SIZE = Pt(17)
 BODY_SIZE = Pt(14)
 SMALL_SIZE = Pt(11)
-FOOTER_SIZE = Pt(8)
+FOOTER_SIZE = Pt(7)
 
 PRODUCT_NAME = "SHB CreditOps EvidenceGraph"
 
