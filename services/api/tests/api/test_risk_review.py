@@ -28,6 +28,7 @@ from creditops.application.ports.orchestration import (
     OrchestrationSnapshot,
     OrchestrationTaskRow,
     OutboxEventRow,
+    StaleCaseVersionError,
 )
 from creditops.application.ports.repositories import CaseRecord
 from creditops.application.ports.risk_review import (
@@ -149,14 +150,45 @@ class FakeOrchestrationRepository:
         self.created_tasks: list[dict[str, Any]] = []
         self.outbox: list[OutboxEventRow] = []
         self.audit_events: list[Any] = []
+        self.case_version = 1
+        self.has_intake_handoff = True
+        self.bump_calls: list[dict[str, Any]] = []
 
     async def load_snapshot(self, case_id: UUID) -> Any:
         # The auto-tick kickoff needs the current case version.
         if case_id != CASE_ID:
             return None
         return OrchestrationSnapshot(
-            case_id=case_id, case_version=1, has_intake_handoff=True
+            case_id=case_id,
+            case_version=self.case_version,
+            has_intake_handoff=self.has_intake_handoff,
         )
+
+    async def bump_case_version(
+        self,
+        case_id: UUID,
+        *,
+        expected_version: int,
+        reason: str,
+        disposition_ref: str,
+        actor_id: UUID | None = None,
+    ) -> int:
+        if expected_version != self.case_version:
+            raise StaleCaseVersionError("case version moved on")
+        self.bump_calls.append(
+            {
+                "case_id": case_id,
+                "expected_version": expected_version,
+                "reason": reason,
+                "disposition_ref": disposition_ref,
+                "actor_id": actor_id,
+            }
+        )
+        self.case_version += 1
+        # The intake handoff is re-issued at the new version (evidence base
+        # unchanged), so G1 stays satisfied.
+        self.has_intake_handoff = True
+        return self.case_version
 
     async def ensure_gate(self, **kwargs: Any) -> GateRecord:
         self.ensure_gate_calls.append(kwargs)
@@ -407,13 +439,19 @@ def test_no_risk_review_yet_is_404(
 def test_maker_must_revise_records_but_never_satisfies_g3(
     signing_key: rsa.RSAPrivateKey,
 ) -> None:
-    # Master design sections 6 and 9: MAKER_MUST_REVISE demands a maker
-    # revision -- the disposition is recorded, but the case must NOT continue
-    # past G3 and Credit Operations must NOT open.
+    # Master design sections 6 and 9: MAKER_MUST_REVISE on a HIGH-severity
+    # challenge records the disposition, but the case must NOT continue past G3
+    # (Credit Operations must NOT open).  Instead it opens the FORWARD revision
+    # loop: the case version is bumped and a REVISE-keyed ORCHESTRATOR_PLAN task
+    # is created + dispatched so only the invalidated makers rerun.
     repository = FakeRiskReviewRepository()
     orchestration = FakeOrchestrationRepository()
+    queue = RecordingAgentQueue()
     client = _build_client(
-        signing_key, repository=repository, orchestration_repository=orchestration
+        signing_key,
+        repository=repository,
+        orchestration_repository=orchestration,
+        agent_queue=queue,
     )
 
     response = client.post(
@@ -428,7 +466,51 @@ def test_maker_must_revise_records_but_never_satisfies_g3(
     assert body["actorRole"] == RISK_REVIEWER_ROLE
     assert body["actorId"] == str(OFFICER_A)
     assert len(repository.dispositions) == 1
+    # G3 is NEVER satisfied by a revise directive: no gate write at all.
     assert orchestration.ensure_gate_calls == []
+    # The case version is bumped optimistically off the disposed version...
+    assert len(orchestration.bump_calls) == 1
+    assert orchestration.bump_calls[0]["expected_version"] == 1
+    assert str(repository.dispositions[0].id) in orchestration.bump_calls[0][
+        "disposition_ref"
+    ]
+    assert orchestration.case_version == 2
+    # ...and a REVISE-keyed plan task is created and dispatched.
+    plan_tasks = [
+        call
+        for call in orchestration.created_tasks
+        if call["task_type"] is TaskType.ORCHESTRATOR_PLAN
+    ]
+    assert len(plan_tasks) == 1
+    assert "REVISE:" in str(plan_tasks[0]["idempotency_key"])
+    assert str(repository.dispositions[0].id) in str(plan_tasks[0]["idempotency_key"])
+    assert len(queue.sent) == 1
+    assert queue.sent[0].task_type is TaskType.ORCHESTRATOR_PLAN
+
+
+def test_accepted_risk_disposition_does_not_bump_case_version(
+    signing_key: rsa.RSAPrivateKey,
+) -> None:
+    # A continue-authorizing disposition satisfies G3 (the forward path is the
+    # G3 retick, not a revision) and must NEVER bump the case version.
+    repository = FakeRiskReviewRepository()
+    orchestration = FakeOrchestrationRepository()
+    client = _build_client(
+        signing_key, repository=repository, orchestration_repository=orchestration
+    )
+
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/risk-review/challenges/{CHALLENGE_ID}/disposition",
+        json={"dispositionType": "ACCEPTED_RISK", "rationale": "Rui ro chap nhan duoc."},
+        headers={"Authorization": f"Bearer {token(signing_key)}"},
+    )
+
+    assert response.status_code == 201
+    assert orchestration.bump_calls == []
+    assert orchestration.case_version == 1
+    # It DOES satisfy G3 (this is the accept path, not the revise path).
+    assert len(orchestration.ensure_gate_calls) == 1
+    assert orchestration.ensure_gate_calls[0]["gate_type"] == GateType.G3_RISK_DISPOSITION
 
 
 def test_risk_reviewer_can_record_a_challenge_disposition(
@@ -499,6 +581,9 @@ def test_g3_satisfaction_reticks_the_orchestrator(
 def test_non_satisfying_disposition_does_not_retick(
     signing_key: rsa.RSAPrivateKey,
 ) -> None:
+    # ESCALATED neither satisfies G3 (not a continue type) nor opens the maker
+    # revision loop (only MAKER_MUST_REVISE does): it awaits a higher-authority
+    # outcome, so no task is created and no message is dispatched.
     repository = FakeRiskReviewRepository()
     orchestration = FakeOrchestrationRepository()
     queue = RecordingAgentQueue()
@@ -511,12 +596,13 @@ def test_non_satisfying_disposition_does_not_retick(
 
     response = client.post(
         f"/api/v1/cases/{CASE_ID}/risk-review/challenges/{CHALLENGE_ID}/disposition",
-        json={"dispositionType": "MAKER_MUST_REVISE", "rationale": "Can bo sung."},
+        json={"dispositionType": "ESCALATED", "rationale": "Chuyen cap co tham quyen."},
         headers={"Authorization": f"Bearer {token(signing_key)}"},
     )
 
     assert response.status_code == 201
     assert orchestration.created_tasks == []
+    assert orchestration.bump_calls == []
     assert queue.sent == []
 
 

@@ -10,13 +10,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from psycopg.types.json import Jsonb
 
-from creditops.application.orchestration.roles import CASE_ORCHESTRATOR_ROLE
+from creditops.application.orchestration.roles import (
+    CASE_ORCHESTRATOR_ROLE,
+    RISK_REVIEWER_ROLE,
+)
 from creditops.application.ports.orchestration import (
     AuditEventRow,
     BlockingGap,
@@ -26,6 +29,7 @@ from creditops.application.ports.orchestration import (
     OrchestrationSnapshot,
     OrchestrationTaskRow,
     OutboxEventRow,
+    StaleCaseVersionError,
 )
 from creditops.domain.enums import TaskStatus
 from creditops.domain.orchestration import GateStatus, GateType, TaskType
@@ -128,6 +132,122 @@ class PostgresOrchestrationRepository:
             gates=gates,
             blocking_gaps=gaps,
         )
+
+    async def bump_case_version(
+        self,
+        case_id: UUID,
+        *,
+        expected_version: int,
+        reason: str,
+        disposition_ref: str,
+        actor_id: UUID | None = None,
+    ) -> int:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                # 1. Optimistic bump.  The WHERE case_version = expected guard is
+                # the concurrency fence: if another writer already advanced the
+                # case, no row is returned and we fail closed without touching
+                # anything else.
+                cursor = await connection.execute(
+                    """
+                    update public.credit_cases
+                    set case_version = case_version + 1,
+                        updated_at = clock_timestamp()
+                    where id = %s and case_version = %s
+                    returning case_version
+                    """,
+                    (case_id, expected_version),
+                )
+                bumped = await cursor.fetchone()
+                if bumped is None:
+                    raise StaleCaseVersionError(
+                        "case version moved on before the revision bump"
+                    )
+                new_version = int(bumped[0])
+
+                # 2. Immutable audit row at the NEW version carrying the reason
+                # and the disposition provenance, in the SAME transaction.
+                await connection.execute(
+                    """
+                    insert into public.audit_events (
+                      case_id, case_version, event_type, actor_type, actor_id,
+                      artifact_type, artifact_id, event_data
+                    ) values (%s, %s, 'CASE_VERSION_BUMPED', %s, %s,
+                              'CREDIT_CASE', %s, %s)
+                    """,
+                    (
+                        case_id,
+                        new_version,
+                        f"HUMAN:{RISK_REVIEWER_ROLE}",
+                        actor_id,
+                        case_id,
+                        Jsonb(
+                            {
+                                "reason": reason,
+                                "dispositionRef": disposition_ref,
+                                "previousVersion": expected_version,
+                                "newVersion": new_version,
+                                "recordedAt": datetime.now(UTC).isoformat(),
+                            }
+                        ),
+                    ),
+                )
+
+                # 3. Re-issue the intake handoff at the new version by cloning
+                # the latest READY_FOR_SPECIALIST_REVIEW handoff from the old
+                # version.  G1 derives from ``has_intake_handoff`` scoped to the
+                # current version, so without this clone G1 would be OPEN at the
+                # new version and NOTHING would schedule -- wrong for a revision
+                # loop whose evidence base is unchanged (only the analysis must
+                # redo).  A provenance note is merged into the immutable
+                # handoff_data.
+                #
+                # SCHEMA NOTE (failed-closed boundary): ``handoffs_task_case_fk``
+                # (migration 202607170006) binds ``(source_task_id, case_id,
+                # case_version)`` to ``processing_tasks``, and a DOCUMENT_INGESTION
+                # source task is itself version-scoped to a ``document_version``.
+                # The clone preserves the original ``source_task_id`` per the
+                # revision design; making this pass a live Postgres FK requires
+                # the intake evidence chain (ingestion task + document version)
+                # to be carried forward to the new version, which is out of this
+                # change's scope (it touches intake/underwriting adapters and
+                # migrations).  The single-transaction shape is proven by the
+                # contract test with a fake connection.
+                await connection.execute(
+                    """
+                    insert into public.handoffs (
+                      id, case_id, case_version, source_task_id, state,
+                      handoff_schema_version, handoff_data, created_by_type,
+                      created_by_id
+                    )
+                    select %s, case_id, %s, source_task_id, state,
+                           handoff_schema_version,
+                           handoff_data || %s::jsonb,
+                           created_by_type, created_by_id
+                    from public.handoffs
+                    where case_id = %s and case_version = %s
+                      and state = 'READY_FOR_SPECIALIST_REVIEW'
+                      and stale_at is null
+                    order by created_at desc
+                    limit 1
+                    """,
+                    (
+                        uuid4(),
+                        new_version,
+                        Jsonb(
+                            {
+                                "revisionProvenance": {
+                                    "reissuedFromVersion": expected_version,
+                                    "reason": reason,
+                                    "dispositionRef": disposition_ref,
+                                }
+                            }
+                        ),
+                        case_id,
+                        expected_version,
+                    ),
+                )
+        return new_version
 
     async def ensure_gate(
         self,

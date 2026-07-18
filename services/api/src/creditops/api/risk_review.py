@@ -41,6 +41,7 @@ from creditops.application.ports.orchestration import OrchestrationRepository
 from creditops.application.ports.risk_review import RiskReviewRepository
 from creditops.application.unit_of_work import ActorContext
 from creditops.application.use_cases.dispatch_outbox import DispatchOutbox
+from creditops.application.use_cases.request_maker_revision import RequestMakerRevision
 from creditops.domain.orchestration import GateStatus, GateType
 from creditops.domain.risk_review import ChallengeSeverity
 from creditops.observability import log_event
@@ -342,6 +343,12 @@ async def _record_disposition(
     )
 
     await _maybe_satisfy_g3(request, record, actor)
+    # MAKER_MUST_REVISE never satisfies G3 (above is a no-op for it); instead it
+    # opens the forward revision loop (master design section 9).  Only a
+    # challenge-level disposition reaches here as MAKER_MUST_REVISE -- the
+    # assessment-level endpoint already rejects it with 422.
+    if challenge_id is not None and body.disposition_type == "MAKER_MUST_REVISE":
+        await _maybe_request_maker_revision(request, record, actor, disposition)
     return _disposition_response(disposition)
 
 
@@ -398,6 +405,63 @@ async def _maybe_satisfy_g3(
         case_id=record.case_id,
         trigger_ref=f"G3:{record.assessment_id}",
     )
+
+
+async def _maybe_request_maker_revision(
+    request: Request, record: Any, actor: ActorContext, disposition: Any
+) -> None:
+    """Open the maker-revision forward path after a MAKER_MUST_REVISE
+    disposition persists (master design section 9).
+
+    Bumps the case version, re-issues the intake handoff, and self-fires a
+    fresh orchestration tick (``REVISE:{disposition_id}``) so only the
+    invalidated maker/risk nodes rerun on the new version.  Best-effort and
+    guarded exactly like ``_retick_orchestration``: any failure -- including a
+    ``StaleCaseVersionError`` when the case already moved on -- is logged and
+    never fails the human's already-durable disposition.  The version bump +
+    handoff re-issue commit durably in the use case; the queue publish is the
+    best-effort ``DispatchOutbox`` step here, mirroring the G3 retick.
+    """
+
+    orchestration_repository = _orchestration_repository(request)
+    if orchestration_repository is None:
+        return
+    try:
+        result = await RequestMakerRevision(orchestration_repository).execute(
+            case_id=record.case_id,
+            expected_version=record.case_version,
+            disposition_id=disposition.id,
+            actor_id=actor.actor_id,
+            reason=disposition.rationale_vi,
+        )
+        queue = getattr(request.app.state, "agent_task_queue", None)
+        if queue is not None:
+            await DispatchOutbox(
+                orchestration_repository,
+                queue,
+                worker_dispatcher=getattr(
+                    request.app.state, "worker_dispatcher", None
+                ),
+            ).run()
+        log_event(
+            logging.getLogger(__name__),
+            logging.INFO,
+            "Maker revision requested after MAKER_MUST_REVISE disposition",
+            {
+                "event": "maker_revision_requested",
+                "previousVersion": result.previous_version,
+                "newVersion": result.new_version,
+                "planCreated": result.plan_created,
+            },
+        )
+    except Exception:
+        log_event(
+            logging.getLogger(__name__),
+            logging.ERROR,
+            "Maker revision request failed; the disposition is durable and the "
+            "case can be revised manually",
+            {"event": "maker_revision_request_failed"},
+        )
 
 
 async def _retick_orchestration(
