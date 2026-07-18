@@ -32,6 +32,37 @@ CreditOps dùng nhiều vai trò khi mỗi vai trò có trách nhiệm, context,
 
 Các role không được phép tự xóa disagreement, tự đóng gap trọng yếu hoặc tự chuyển một output của model thành quyết định. Material calculations, state transitions, authorization, idempotency, version fence và persistence thuộc deterministic engine. Output không đủ schema, thiếu evidence, có hành vi vượt thẩm quyền hoặc yêu cầu approve, reject, waiver hay disbursement phải bị từ chối hoặc đi vào manual review. Separation of duties vì vậy được hiện diện trong product contract, không chỉ trong sơ đồ kiến trúc.
 
+### Sáu vai trò, sáu hợp đồng thẩm quyền
+
+Sáu agent là vai trò logic ở tầng ứng dụng, không phải sáu model hoặc sáu service phải chạy độc lập. Một endpoint inference đã qua benchmark có thể phục vụ nhiều role; sự chuyên môn hóa đến từ instruction, context, tool, permission và output schema khác nhau.
+
+| Vai trò | Trách nhiệm | Output có thể review | Ranh giới không được vượt qua |
+|---|---|---|---|
+| Case Orchestrator | Đọc case state, xác định task ready, blocked hoặc stale và route công việc | Task plan, dependency state, escalation | Không tự làm phân tích chuyên môn hoặc quyết định tín dụng |
+| Relationship and Intake | Cấu trúc nhu cầu vốn, gắn tài liệu, phát hiện thiếu/trùng/xung đột ban đầu | Structured intake, candidate fact, initial gap | Không bịa dữ kiện hoặc tự gửi yêu cầu khách hàng |
+| Credit Underwriting | Chuẩn bị phân tích business, financial, cash flow, working capital và cấu trúc đề xuất | Finding, calculation, risk, mitigant, assumption | Không phê duyệt/từ chối hoặc dùng LLM thay phép tính deterministic |
+| Legal, Compliance and Collateral | Rà soát tư cách, thẩm quyền, ownership, controlled check, policy và tài sản | Issue có evidence, citation, possible exception | Không kết luận pháp lý cuối cùng, cáo buộc sai phạm hoặc định giá chỉ bằng LLM |
+| Independent Risk Review | Thách thức maker, tìm omission, assumption yếu, mitigant chưa đủ và gap chưa đóng | Challenge, request for evidence/change/manual review | Không vừa là maker vừa tự clearance, không phê duyệt/từ chối |
+| Credit Operations | Kiểm tra package, gom provenance và chuẩn bị draft memo/proposed action | Draft case package cho người xem xét | Không thực thi hành động nhạy cảm khi chưa có authorization |
+
+Không role nào được mở rộng quyền qua Orchestrator, và rerun không được làm gap hoặc challenge biến mất khỏi audit history. Điều này buộc sản phẩm ghi nhận disagreement như một phần của case, thay vì để agent có câu trả lời “mượt hơn” thắng agent khác.
+
+### Evidence Gap Resolution: thiếu sót cũng là một artifact
+
+Evidence Gap Resolution không là một chatbot phụ. Đây là capability dùng chung để biến evidence thiếu, mâu thuẫn, stale, khó đọc, low-confidence hoặc chưa đủ hỗ trợ cho kết luận thành workflow state có owner và lịch sử. Một gap tốt cho biết evidence hiện có và vùng nguồn, thông tin cần làm rõ, lý do, task/finding/calculation/memo section bị ảnh hưởng, mức độ `BLOCKING`, `CONDITIONAL` hoặc `CLARIFICATION`, tài liệu tối thiểu được gợi ý, approval status và resolution evidence.
+
+Các mức trên là ngôn ngữ vận hành của sản phẩm, không phải phân loại chính thức của SHB. Gap không phải bằng chứng gian lận hoặc vi phạm. AI có thể đề xuất tài liệu và rationale, nhưng nhân sự có thẩm quyền phải duyệt trước khi yêu cầu được gửi cho khách hàng.
+
+### AI diễn giải; hệ thống xác định và con người quyết định
+
+| Phù hợp cho AI có giới hạn | Phải thuộc deterministic tool/service hoặc con người |
+|---|---|
+| Diễn giải ngữ cảnh tài liệu, chuẩn bị analysis có citation, phát hiện candidate conflict/gap | Phép tính, reconciliation, threshold, authorization, role/case access và state transition |
+| Giải thích uncertainty, alternative interpretation, challenge và draft cho reviewer | Controlled KYC/AML/watchlist/CIC/collateral lookup, database write, idempotency, immutable version và audit event |
+| Gợi ý bước tiếp theo | Credit decision, exception disposition, customer communication approval, signing, disbursement và mutation hệ thống nhạy cảm |
+
+FPT chỉ thực hiện inference. Model response không trở thành case truth, quyền hạn, tool execution hay approval record; gateway kiểm tra schema, giới hạn payload và từ chối trường quyết định bị cấm trước khi output được dùng trong workflow.
+
 ## EvidenceGraph: mỗi kết luận đều có đường về nguồn
 
 ```mermaid
