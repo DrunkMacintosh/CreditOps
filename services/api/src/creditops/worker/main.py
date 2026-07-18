@@ -82,6 +82,8 @@ class WorkerRuntime:
     tasks: PostgresTaskRepository
     queue: SupabaseQueue
     registry: ProcessorRegistry
+    orchestration: PostgresOrchestrationRepository
+    agent_queue: SupabaseQueue
     #: Whether a benchmark-passed FPT route was activated for this runtime.
     inference_enabled: bool
 
@@ -169,8 +171,53 @@ def build_runtime(
         tasks=tasks,
         queue=queue,
         registry=registry,
+        orchestration=orchestration,
+        agent_queue=agent_queue,
         inference_enabled=reasoning is not None,
     )
+
+
+async def maybe_retick_after_success(
+    result: WorkerRunResult,
+    orchestration: object | None,
+    agent_queue: QueuePort | None,
+) -> None:
+    """Self-fire an idempotent orchestration tick after a task success.
+
+    A succeeding ORCHESTRATOR_PLAN task never re-ticks (it IS the tick —
+    re-ticking would chain plan tasks forever) and non-success outcomes never
+    re-tick.  The plan task + outbox event commit durably; the queue publish
+    is best-effort and a failure is logged, never silent.
+    """
+
+    from typing import cast
+
+    from creditops.application.orchestration.kickoff import KickoffOrchestration
+    from creditops.application.ports.orchestration import OrchestrationRepository
+
+    if (
+        orchestration is None
+        or result.outcome is not WorkerOutcome.SUCCEEDED
+        or result.case_id is None
+        or result.task_type is None
+        or result.task_type is TaskType.ORCHESTRATOR_PLAN
+    ):
+        return
+    repository = cast(OrchestrationRepository, orchestration)
+    try:
+        await KickoffOrchestration(repository).execute(
+            result.case_id, trigger_ref=f"TASK:{result.task_id}"
+        )
+        if agent_queue is not None:
+            await DispatchOutbox(repository, agent_queue).run()
+    except Exception:
+        log_event(
+            _logger,
+            logging.ERROR,
+            "Post-success orchestration retick failed; the task result is "
+            "durable and the case can be advanced manually",
+            {"event": "orchestration_retick_failed", "taskId": str(result.task_id)},
+        )
 
 
 async def run_once(
@@ -178,14 +225,19 @@ async def run_once(
     tasks: TaskRepository,
     queue: QueuePort,
     processor: TaskProcessor | TaskProcessorRegistry,
+    orchestration: object | None = None,
+    agent_queue: QueuePort | None = None,
 ) -> WorkerRunResult:
     """Run one real injected worker execution.
 
     There is intentionally no synthetic processor or preloaded result.
     ``processor`` may be a single processor (legacy) or a per-task-type
-    registry.
+    registry.  When an orchestration repository is supplied, a task success
+    re-ticks the case (master design section 9).
     """
-    return await RunWorkerOnce(tasks, queue, processor).run_once()
+    result = await RunWorkerOnce(tasks, queue, processor).run_once()
+    await maybe_retick_after_success(result, orchestration, agent_queue)
+    return result
 
 
 def main(
@@ -199,6 +251,8 @@ def main(
         service_name=settings.service_name,
         level=settings.log_level,
     )
+    orchestration: object | None = None
+    agent_queue: QueuePort | None = None
     if tasks is None and queue is None and processor is None:
         runtime = build_runtime(settings)
         if runtime is not None:
@@ -214,9 +268,19 @@ def main(
                 },
             )
             tasks, queue, processor = runtime.tasks, runtime.queue, runtime.registry
+            orchestration = runtime.orchestration
+            agent_queue = runtime.agent_queue
 
     if tasks is not None and queue is not None and processor is not None:
-        result = asyncio.run(run_once(tasks=tasks, queue=queue, processor=processor))
+        result = asyncio.run(
+            run_once(
+                tasks=tasks,
+                queue=queue,
+                processor=processor,
+                orchestration=orchestration,
+                agent_queue=agent_queue,
+            )
+        )
         if result.outcome in {
             WorkerOutcome.SUCCEEDED,
             WorkerOutcome.SUPERSEDED,
