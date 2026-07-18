@@ -19,6 +19,7 @@ from creditops.api.errors import (
     unexpected_exception_handler,
     validation_exception_handler,
 )
+from creditops.api.gap_requests import router as gap_requests_router
 from creditops.api.legal import router as legal_router
 from creditops.api.orchestration import router as orchestration_router
 from creditops.api.risk_review import router as risk_review_router
@@ -31,6 +32,9 @@ from creditops.config import Settings
 from creditops.infrastructure.gcp.cloud_run_dispatcher import CloudRunDispatcher
 from creditops.infrastructure.gcp.metadata_token import MetadataTokenProvider
 from creditops.infrastructure.postgres.credit_ops import PostgresCreditOpsRepository
+from creditops.infrastructure.postgres.gap_request_batches import (
+    PostgresGapRequestRepository,
+)
 from creditops.infrastructure.postgres.legal import PostgresLegalRepository
 from creditops.infrastructure.postgres.orchestration import (
     PostgresOrchestrationRepository,
@@ -145,6 +149,11 @@ def create_app(
         if database_connection_factory is not None
         else None
     )
+    application.state.gap_request_repository = (
+        PostgresGapRequestRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
     application.state.worker_dispatcher = (
         CloudRunDispatcher(
             project_id=cast(str, configured.gcp_project_id),
@@ -191,6 +200,7 @@ def create_app(
     application.include_router(legal_router)
     application.include_router(risk_review_router)
     application.include_router(credit_ops_router)
+    application.include_router(gap_requests_router)
     return application
 
 

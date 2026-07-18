@@ -14,17 +14,23 @@ the human-facing disposition API (``api/risk_review.py``) after it records a
 disposition — never by the Independent Risk Review Agent itself.  The checker
 processor never imports or calls this function.
 
-``derive_g2_status`` and ``derive_g4_status`` extend the same pattern for the
-Credit Operations Agent's two human-approval surfaces: G2 (document-request
-approval, mirrored from ``G2_GAP_REQUEST_APPROVAL``'s existing role gating
-INDEPENDENT_RISK_REVIEW readiness) and G4 (``G4_OPS_AUTHORIZATION``, action
-authorization).  Both are derived here but WRITTEN only by
-``api/credit_ops.py`` after it records a human approval/authorization record
-— never by the Credit Operations Agent's worker processor, which never
-imports or calls either function.  Writing G2 here does not change how
-INDEPENDENT_RISK_REVIEW's own readiness is evaluated (application/orchestration/
-readiness.py still reads whatever G2 status is stored for the case version,
-regardless of which human-facing endpoint wrote it); ``ensure_gate`` is an
+``G2_GAP_REQUEST_APPROVAL`` is NO LONGER derived here.  It is the pre-Risk
+Evidence-Gap workflow gate (the ``HG_OUTBOUND_REQUEST_APPROVED`` capability,
+master design section 9): it is derived ONLY from a ``GapRequestBatch`` plus a
+human disposition, by ``domain/gap_request_batches.derive_g2_from_batch``, and
+WRITTEN only by ``api/gap_requests.py``.  It no longer references the credit-ops
+package in any way -- the old package-based G2 derivation and its credit-ops
+writer have both been deleted, which is what breaks the
+Risk-waits-on-Credit-Operations cycle.  ``INDEPENDENT_RISK_REVIEW`` still gates
+on the STORED G2 status for the case version (readiness.py reads whatever is
+stored, regardless of which endpoint wrote it), so a satisfied G2 recorded from
+a batch disposition -- with zero credit-ops packages anywhere -- makes Risk
+ready.
+
+``derive_g4_status`` keeps the Credit Operations pattern for G4
+(``G4_OPS_AUTHORIZATION``, action authorization): derived here, WRITTEN only by
+``api/credit_ops.py`` after it records a human authorization record -- never by
+the Credit Operations Agent's worker processor.  ``ensure_gate`` is an
 idempotent insert-if-absent-then-satisfy-only-if-OPEN write, so an additional
 writer for the same gate type is always safe.
 """
@@ -164,28 +170,6 @@ def derive_g3_status(
         if latest_assessment_level_disposition in G3_CONTINUE_DISPOSITION_TYPES
         else GateStatus.OPEN
     )
-
-
-def derive_g2_status(
-    *,
-    package_exists: bool,
-    request_ids: Set[UUID],
-    approved_request_ids: Set[UUID],
-) -> GateStatus:
-    """Whether G2_GAP_REQUEST_APPROVAL MAY derive SATISFIED for the credit-ops
-    document-request batch attached to the latest package.
-
-    SATISFIED requires a credit-ops package to exist for the case version AND
-    every drafted document request in it to have its own human approval
-    record (``request_ids <= approved_request_ids``; vacuously true when
-    there are zero drafted requests -- there is nothing to approve).  No
-    credit-ops agent code calls this; only the human-facing approval
-    endpoint (``api/credit_ops.py``) does, after it records an approval.
-    """
-
-    if not package_exists:
-        return GateStatus.OPEN
-    return GateStatus.SATISFIED if request_ids <= approved_request_ids else GateStatus.OPEN
 
 
 def derive_g4_status(

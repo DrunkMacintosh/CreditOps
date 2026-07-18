@@ -14,18 +14,23 @@ The two POSTs are the ONLY human write surfaces for a credit-ops package:
   code path anywhere in this codebase executes an action; the action's
   ``execution_status`` enum has no EXECUTED member at all.
 - ``POST .../document-requests/{request_id}/approve`` records an append-only
-  human approval of ONE drafted document request.  Approval flips only the
-  derived ``approval_status`` view; it never mutates the package row and
-  never sends anything (no send mechanism exists).
+  human approval of ONE drafted document request.  These are POST-Risk
+  operational artifacts: approval flips only the derived ``approval_status``
+  view, never mutates the package row, and never sends anything (no send
+  mechanism exists).  Critically, it drives NOTHING gate-wise -- G2 is now the
+  pre-Risk Evidence-Gap workflow gate (``api/gap_requests.py``,
+  ``domain/gap_request_batches.py``), no longer derived from this package, so
+  the old Risk-waits-on-Credit-Operations cycle is broken.  The read model's
+  ``g2GateStatus`` therefore reports the sentinel ``SEE_GAP_REQUEST_WORKFLOW``.
 
-Both POSTs are restricted to the OPS_OFFICER human role.  After recording,
-each handler re-derives its gate (``derive_g4_status`` /
-``derive_g2_status``, application/orchestration/gates.py) and, only if the
-pure derivation says SATISFIED, calls the orchestration repository to record
-it -- the credit-ops worker never calls this; only a human record can
-trigger it, and only through the deterministic derivation.  Authorizing a
-nonexistent or foreign action/request 404s without a capability leak
-(indistinguishable from a case the actor cannot access).
+The ``authorize`` POST is restricted to the OPS_OFFICER human role.  After
+recording, it re-derives G4 (``derive_g4_status``,
+application/orchestration/gates.py) and, only if the pure derivation says
+SATISFIED, calls the orchestration repository to record it -- the credit-ops
+worker never calls this; only a human record can trigger it, and only through
+the deterministic derivation.  Authorizing a nonexistent or foreign
+action/request 404s without a capability leak (indistinguishable from a case
+the actor cannot access).
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from creditops.api.auth import require_actor
 from creditops.api.errors import ApiException
-from creditops.application.orchestration.gates import derive_g2_status, derive_g4_status
+from creditops.application.orchestration.gates import derive_g4_status
 from creditops.application.orchestration.kickoff import KickoffOrchestration
 from creditops.application.orchestration.roles import (
     CASE_PARTICIPANT_ROLES,
@@ -58,6 +63,11 @@ from creditops.domain.orchestration import GateStatus, GateType
 from creditops.observability import log_event
 
 router = APIRouter(prefix="/api/v1/cases/{case_id}/credit-ops", tags=["credit-ops"])
+
+#: G2 is no longer derived from the credit-ops package.  The read model reports
+#: this sentinel and points readers to the pre-Risk gap-request workflow
+#: (``api/gap_requests.py``) that actually owns the G2 gate now.
+G2_GAP_REQUEST_WORKFLOW_SENTINEL = "SEE_GAP_REQUEST_WORKFLOW"
 
 
 class HandoffStatusResponse(BaseModel):
@@ -286,11 +296,6 @@ async def get_credit_ops(
                 )
             )
 
-    g2_status = derive_g2_status(
-        package_exists=True,
-        request_ids={r.id for r in requests},
-        approved_request_ids=set(by_request.keys()),
-    )
     g4_status = derive_g4_status(
         package_exists=True,
         action_ids={a.id for a in actions},
@@ -325,7 +330,7 @@ async def get_credit_ops(
         draft_memo=dict(cast("dict[str, object]", record.package.get("draft_memo", {}))),
         document_requests=requests,
         proposed_actions=actions,
-        g2_gate_status=g2_status.value,
+        g2_gate_status=G2_GAP_REQUEST_WORKFLOW_SENTINEL,
         g4_gate_status=g4_status.value,
     )
 
@@ -399,8 +404,10 @@ async def approve_document_request(
 ) -> ApprovalResponse:
     """Record ONE append-only human approval for ONE drafted document request.
 
-    Flips only the derived approval view; never mutates the package row and
-    never sends anything (no send mechanism exists in this codebase).
+    A POST-Risk operational artifact: flips only the derived approval view,
+    never mutates the package row, never sends anything, and -- unlike before
+    -- drives NO gate.  G2 is owned entirely by the pre-Risk gap-request
+    workflow now (``api/gap_requests.py``); this endpoint no longer touches it.
     """
 
     _require_ops_officer(actor)
@@ -436,7 +443,6 @@ async def approve_document_request(
             },
         )
     )
-    await _maybe_satisfy_g2(request, repository, record, actor)
     return _approval_response(approval)
 
 
@@ -474,38 +480,6 @@ async def _maybe_satisfy_g4(
         orchestration_repository,
         case_id=record.case_id,
         trigger_ref=f"G4:{record.package_id}",
-    )
-
-
-async def _maybe_satisfy_g2(
-    request: Request, repository: CreditOpsRepository, record: Any, actor: ActorContext
-) -> None:
-    """Re-derive G2 after an approval and record it ONLY if now SATISFIED."""
-
-    orchestration_repository = _orchestration_repository(request)
-    if orchestration_repository is None:
-        return
-    approvals = await repository.load_document_request_approvals(record.package_id)
-    status = derive_g2_status(
-        package_exists=True,
-        request_ids={UUID(value) for value in _ids_in(record.package, "document_requests")},
-        approved_request_ids={a.request_id for a in approvals},
-    )
-    if status is not GateStatus.SATISFIED:
-        return
-    await orchestration_repository.ensure_gate(
-        case_id=record.case_id,
-        case_version=record.case_version,
-        gate_type=GateType.G2_GAP_REQUEST_APPROVAL,
-        status=GateStatus.SATISFIED,
-        satisfied_by_actor_id=actor.actor_id,
-        disposition_ref=f"credit-ops-package:{record.package_id}",
-    )
-    await _retick_orchestration(
-        request,
-        orchestration_repository,
-        case_id=record.case_id,
-        trigger_ref=f"G2:{record.package_id}",
     )
 
 
