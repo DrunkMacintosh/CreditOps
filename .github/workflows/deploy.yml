@@ -98,6 +98,12 @@ jobs:
       - name: Authenticate Docker to Artifact Registry
         run: gcloud auth configure-docker "${GAR_LOCATION}-docker.pkg.dev" --quiet
 
+      # provenance + sbom attestations below require the docker-container
+      # buildx driver; the default "docker" driver rejects them with
+      # "Attestation is not supported for the docker driver".
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Set image coordinates
         id: image
         env:
