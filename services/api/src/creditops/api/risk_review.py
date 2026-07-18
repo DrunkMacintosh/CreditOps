@@ -21,6 +21,7 @@ it, and only through this deterministic derivation.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
@@ -31,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from creditops.api.auth import require_actor
 from creditops.api.errors import ApiException
 from creditops.application.orchestration.gates import derive_g3_status
+from creditops.application.orchestration.kickoff import KickoffOrchestration
 from creditops.application.orchestration.roles import (
     CASE_PARTICIPANT_ROLES,
     RISK_REVIEWER_ROLE,
@@ -38,8 +40,10 @@ from creditops.application.orchestration.roles import (
 from creditops.application.ports.orchestration import OrchestrationRepository
 from creditops.application.ports.risk_review import RiskReviewRepository
 from creditops.application.unit_of_work import ActorContext
+from creditops.application.use_cases.dispatch_outbox import DispatchOutbox
 from creditops.domain.orchestration import GateStatus, GateType
 from creditops.domain.risk_review import ChallengeSeverity
+from creditops.observability import log_event
 
 router = APIRouter(prefix="/api/v1/cases/{case_id}/risk-review", tags=["risk-review"])
 
@@ -388,6 +392,54 @@ async def _maybe_satisfy_g3(
         satisfied_by_actor_id=actor.actor_id,
         disposition_ref=f"risk-review-assessment:{record.assessment_id}",
     )
+    await _retick_orchestration(
+        request,
+        orchestration_repository,
+        case_id=record.case_id,
+        trigger_ref=f"G3:{record.assessment_id}",
+    )
+
+
+async def _retick_orchestration(
+    request: Request,
+    orchestration_repository: Any,
+    *,
+    case_id: UUID,
+    trigger_ref: str,
+) -> None:
+    """Self-fire an idempotent orchestration tick after a gate satisfaction.
+
+    The plan task + outbox event commit durably; the queue publish is
+    best-effort here (the recovery dispatch picks up anything left).  A tick
+    failure must never fail the human's already-recorded disposition, but it
+    is logged, never silent.
+    """
+
+    try:
+        result = await KickoffOrchestration(orchestration_repository).execute(
+            case_id, trigger_ref=trigger_ref
+        )
+        queue = getattr(request.app.state, "agent_task_queue", None)
+        if queue is not None:
+            await DispatchOutbox(orchestration_repository, queue).run()
+        log_event(
+            logging.getLogger(__name__),
+            logging.INFO,
+            "Orchestration retick after gate satisfaction",
+            {
+                "event": "orchestration_retick",
+                "trigger": trigger_ref,
+                "created": result.created,
+            },
+        )
+    except Exception:
+        log_event(
+            logging.getLogger(__name__),
+            logging.ERROR,
+            "Orchestration retick failed; the disposition is durable and the "
+            "case can be advanced manually",
+            {"event": "orchestration_retick_failed", "trigger": trigger_ref},
+        )
 
 
 def _disposition_response(disposition: Any) -> DispositionResponse:

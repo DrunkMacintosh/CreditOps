@@ -30,6 +30,7 @@ nonexistent or foreign action/request 404s without a capability leak
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
@@ -40,6 +41,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from creditops.api.auth import require_actor
 from creditops.api.errors import ApiException
 from creditops.application.orchestration.gates import derive_g2_status, derive_g4_status
+from creditops.application.orchestration.kickoff import KickoffOrchestration
 from creditops.application.orchestration.roles import (
     CASE_PARTICIPANT_ROLES,
     OPS_OFFICER_ROLE,
@@ -50,8 +52,10 @@ from creditops.application.ports.orchestration import (
     OrchestrationRepository,
 )
 from creditops.application.unit_of_work import ActorContext
+from creditops.application.use_cases.dispatch_outbox import DispatchOutbox
 from creditops.domain.credit_ops import DocumentRequestApprovalStatus
 from creditops.domain.orchestration import GateStatus, GateType
+from creditops.observability import log_event
 
 router = APIRouter(prefix="/api/v1/cases/{case_id}/credit-ops", tags=["credit-ops"])
 
@@ -465,6 +469,12 @@ async def _maybe_satisfy_g4(
         satisfied_by_actor_id=actor.actor_id,
         disposition_ref=f"credit-ops-package:{record.package_id}",
     )
+    await _retick_orchestration(
+        request,
+        orchestration_repository,
+        case_id=record.case_id,
+        trigger_ref=f"G4:{record.package_id}",
+    )
 
 
 async def _maybe_satisfy_g2(
@@ -491,6 +501,54 @@ async def _maybe_satisfy_g2(
         satisfied_by_actor_id=actor.actor_id,
         disposition_ref=f"credit-ops-package:{record.package_id}",
     )
+    await _retick_orchestration(
+        request,
+        orchestration_repository,
+        case_id=record.case_id,
+        trigger_ref=f"G2:{record.package_id}",
+    )
+
+
+async def _retick_orchestration(
+    request: Request,
+    orchestration_repository: Any,
+    *,
+    case_id: UUID,
+    trigger_ref: str,
+) -> None:
+    """Self-fire an idempotent orchestration tick after a gate satisfaction.
+
+    Mirrors ``api/risk_review.py``: the plan task + outbox event commit
+    durably, the queue publish is best-effort, and a tick failure never
+    fails the human's already-recorded approval — but it is logged, never
+    silent.
+    """
+
+    try:
+        result = await KickoffOrchestration(orchestration_repository).execute(
+            case_id, trigger_ref=trigger_ref
+        )
+        queue = getattr(request.app.state, "agent_task_queue", None)
+        if queue is not None:
+            await DispatchOutbox(orchestration_repository, queue).run()
+        log_event(
+            logging.getLogger(__name__),
+            logging.INFO,
+            "Orchestration retick after gate satisfaction",
+            {
+                "event": "orchestration_retick",
+                "trigger": trigger_ref,
+                "created": result.created,
+            },
+        )
+    except Exception:
+        log_event(
+            logging.getLogger(__name__),
+            logging.ERROR,
+            "Orchestration retick failed; the approval is durable and the "
+            "case can be advanced manually",
+            {"event": "orchestration_retick_failed", "trigger": trigger_ref},
+        )
 
 
 def _human_audit_event(

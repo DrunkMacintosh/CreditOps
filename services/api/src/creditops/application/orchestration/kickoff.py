@@ -44,8 +44,16 @@ class KickoffResult:
     created: bool
 
 
-def _plan_idempotency_key(case_id: UUID, case_version: int) -> str:
-    return f"ORCH-PLAN:{case_id}:{case_version}"
+def _plan_idempotency_key(
+    case_id: UUID, case_version: int, trigger_ref: str | None
+) -> str:
+    # Version-scoped for the base kickoff; event-scoped when a specific
+    # trigger (gate satisfaction, handoff, task completion) re-ticks the
+    # case at the same version.  AdvanceCase itself is idempotent, so extra
+    # plan tasks are safe; the key only bounds them to one per trigger.
+    if trigger_ref is None:
+        return f"ORCH-PLAN:{case_id}:{case_version}"
+    return f"ORCH-PLAN:{case_id}:{case_version}:{trigger_ref}"
 
 
 class KickoffOrchestration:
@@ -62,7 +70,9 @@ class KickoffOrchestration:
         self._id_factory = id_factory or uuid4
         self._execution_id_factory = execution_id_factory or uuid4
 
-    async def execute(self, case_id: UUID) -> KickoffResult:
+    async def execute(
+        self, case_id: UUID, *, trigger_ref: str | None = None
+    ) -> KickoffResult:
         snapshot = await self._repository.load_snapshot(case_id)
         if snapshot is None:
             raise KickoffCaseNotFound("case is not visible to the orchestrator")
@@ -72,8 +82,12 @@ class KickoffOrchestration:
             case_id=case_id,
             case_version=snapshot.case_version,
             task_type=TaskType.ORCHESTRATOR_PLAN,
-            idempotency_key=_plan_idempotency_key(case_id, snapshot.case_version),
-            input_payload={"trigger": "orchestration.kickoff"},
+            idempotency_key=_plan_idempotency_key(
+                case_id, snapshot.case_version, trigger_ref
+            ),
+            input_payload={
+                "trigger": trigger_ref or "orchestration.kickoff",
+            },
         )
         if result.created:
             await self._audit(

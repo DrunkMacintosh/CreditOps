@@ -44,6 +44,29 @@ async def test_kickoff_refuses_an_invisible_case() -> None:
         await KickoffOrchestration(FakeOrchestrationRepository()).execute(uuid4())
 
 
+@pytest.mark.asyncio
+async def test_event_scoped_kickoffs_reticks_once_per_trigger() -> None:
+    # The orchestration tick must fire after EVERY task/gate/handoff/evidence
+    # event (master design section 9), so a gate satisfied at the same case
+    # version still schedules a fresh plan task -- while the same trigger
+    # delivered twice stays deduplicated.
+    repository = FakeOrchestrationRepository()
+    kickoff = KickoffOrchestration(repository)
+
+    base = await kickoff.execute(CASE_ID)
+    gate_tick = await kickoff.execute(CASE_ID, trigger_ref="G3:assessment-1")
+    duplicate = await kickoff.execute(CASE_ID, trigger_ref="G3:assessment-1")
+    other_gate = await kickoff.execute(CASE_ID, trigger_ref="G2:batch-9")
+
+    assert base.created is True
+    assert gate_tick.created is True
+    assert gate_tick.task_id != base.task_id
+    assert duplicate.created is False
+    assert duplicate.task_id == gate_tick.task_id
+    assert other_gate.created is True
+    assert len(repository.outbox) == 3
+
+
 def test_legacy_envelope_without_task_type_still_parses_as_ingestion() -> None:
     legacy_message = {
         "schema_version": "1",

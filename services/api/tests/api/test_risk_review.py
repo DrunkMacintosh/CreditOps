@@ -8,6 +8,7 @@ Demo".
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Any
@@ -21,14 +22,22 @@ from jwt.algorithms import RSAAlgorithm
 
 from creditops.api.auth import JwksKeyResolver, JwtVerifier
 from creditops.application.orchestration.roles import RISK_REVIEWER_ROLE
-from creditops.application.ports.orchestration import GateRecord
+from creditops.application.ports.orchestration import (
+    CreatedTask,
+    GateRecord,
+    OrchestrationSnapshot,
+    OrchestrationTaskRow,
+    OutboxEventRow,
+)
 from creditops.application.ports.repositories import CaseRecord
 from creditops.application.ports.risk_review import (
     ChallengeDispositionRecord,
     LatestRiskReviewRecord,
 )
 from creditops.config import Settings
-from creditops.domain.orchestration import GateStatus, GateType
+from creditops.domain.enums import TaskStatus
+from creditops.domain.orchestration import GateStatus, GateType, TaskType
+from creditops.domain.tasks import TaskEnvelopeV1
 from creditops.main import create_app
 
 ISSUER = "https://identity.test.example"
@@ -137,9 +146,17 @@ class FakeRiskReviewRepository:
 class FakeOrchestrationRepository:
     def __init__(self) -> None:
         self.ensure_gate_calls: list[dict[str, Any]] = []
+        self.created_tasks: list[dict[str, Any]] = []
+        self.outbox: list[OutboxEventRow] = []
+        self.audit_events: list[Any] = []
 
     async def load_snapshot(self, case_id: UUID) -> Any:
-        raise AssertionError("not used by the risk-review API")
+        # The auto-tick kickoff needs the current case version.
+        if case_id != CASE_ID:
+            return None
+        return OrchestrationSnapshot(
+            case_id=case_id, case_version=1, has_intake_handoff=True
+        )
 
     async def ensure_gate(self, **kwargs: Any) -> GateRecord:
         self.ensure_gate_calls.append(kwargs)
@@ -149,14 +166,87 @@ class FakeOrchestrationRepository:
             status=kwargs["status"],
         )
 
-    async def create_task(self, **kwargs: object) -> Any:
-        raise AssertionError("not used by the risk-review API")
+    async def create_task(self, **kwargs: Any) -> CreatedTask:
+        for existing in self.created_tasks:
+            if existing["idempotency_key"] == kwargs["idempotency_key"]:
+                return CreatedTask(
+                    row=OrchestrationTaskRow(
+                        task_id=existing["task_id"],
+                        task_type=existing["task_type"],
+                        case_version=int(existing["case_version"]),
+                        status=TaskStatus.PENDING,
+                    ),
+                    created=False,
+                )
+        self.created_tasks.append(dict(kwargs))
+        envelope = TaskEnvelopeV1(
+            task_id=kwargs["task_id"],
+            case_id=kwargs["case_id"],
+            case_version=int(kwargs["case_version"]),
+            task_type=kwargs["task_type"],
+            document_version_id=None,
+        )
+        self.outbox.append(
+            OutboxEventRow(
+                event_id=uuid4(),
+                case_id=kwargs["case_id"],
+                case_version=int(kwargs["case_version"]),
+                event_type="TASK_READY",
+                payload=envelope.model_dump(mode="json"),
+            )
+        )
+        return CreatedTask(
+            row=OrchestrationTaskRow(
+                task_id=kwargs["task_id"],
+                task_type=kwargs["task_type"],
+                case_version=int(kwargs["case_version"]),
+                status=TaskStatus.PENDING,
+            ),
+            created=True,
+        )
 
     async def record_proposal(self, **kwargs: object) -> None:
         raise AssertionError("not used by the risk-review API")
 
     async def append_audit(self, event: object) -> None:
-        raise AssertionError("not used by the risk-review API")
+        self.audit_events.append(event)
+
+    async def load_undispatched_outbox(self, *, limit: int) -> tuple[OutboxEventRow, ...]:
+        return tuple(
+            event for event in self.outbox if event.dispatched_at is None
+        )[:limit]
+
+    async def mark_outbox_dispatched(self, event_id: UUID) -> None:
+        for index, event in enumerate(self.outbox):
+            if event.event_id == event_id and event.dispatched_at is None:
+                self.outbox[index] = replace(event, dispatched_at=NOW)
+
+    async def record_outbox_dispatch_failure(self, event_id: UUID) -> None:
+        for index, event in enumerate(self.outbox):
+            if event.event_id == event_id and event.dispatched_at is None:
+                self.outbox[index] = replace(
+                    event, dispatch_attempts=event.dispatch_attempts + 1
+                )
+
+
+class RecordingAgentQueue:
+    def __init__(self) -> None:
+        self.sent: list[TaskEnvelopeV1] = []
+
+    async def send(self, envelope: TaskEnvelopeV1, *, delay_seconds: int = 0) -> int:
+        del delay_seconds
+        self.sent.append(envelope)
+        return len(self.sent)
+
+    async def read_one(self, *, visibility_timeout_seconds: int) -> None:
+        del visibility_timeout_seconds
+        return None
+
+    async def extend_visibility(self, message_id: int, *, visibility_timeout_seconds: int) -> None:
+        del message_id, visibility_timeout_seconds
+
+    async def archive(self, message_id: int) -> None:
+        del message_id
 
 
 class FakeCases:
@@ -198,6 +288,7 @@ def _build_client(
     *,
     repository: FakeRiskReviewRepository,
     orchestration_repository: FakeOrchestrationRepository | None = None,
+    agent_queue: RecordingAgentQueue | None = None,
 ) -> TestClient:
     jwk = RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
     jwk.update({"kid": KEY_ID, "alg": "RS256", "use": "sig"})
@@ -211,6 +302,7 @@ def _build_client(
     )
     application.state.risk_review_repository = repository
     application.state.orchestration_repository = orchestration_repository
+    application.state.agent_task_queue = agent_queue
     return TestClient(application)
 
 
@@ -367,6 +459,65 @@ def test_risk_reviewer_can_record_a_challenge_disposition(
     assert call["gate_type"] == GateType.G3_RISK_DISPOSITION
     assert call["status"] == GateStatus.SATISFIED
     assert call["satisfied_by_actor_id"] == OFFICER_A
+
+
+def test_g3_satisfaction_reticks_the_orchestrator(
+    signing_key: rsa.RSAPrivateKey,
+) -> None:
+    # After a continue-authorizing disposition satisfies G3, the API must
+    # self-fire an idempotent orchestration tick (master design section 9):
+    # a fresh ORCHESTRATOR_PLAN task is created, outboxed, and dispatched so
+    # newly unblocked work gets scheduled without a manual advance call.
+    repository = FakeRiskReviewRepository()
+    orchestration = FakeOrchestrationRepository()
+    queue = RecordingAgentQueue()
+    client = _build_client(
+        signing_key,
+        repository=repository,
+        orchestration_repository=orchestration,
+        agent_queue=queue,
+    )
+
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/risk-review/challenges/{CHALLENGE_ID}/disposition",
+        json={"dispositionType": "ACCEPTED_RISK", "rationale": "Rui ro chap nhan duoc."},
+        headers={"Authorization": f"Bearer {token(signing_key)}"},
+    )
+
+    assert response.status_code == 201
+    plan_tasks = [
+        call
+        for call in orchestration.created_tasks
+        if call["task_type"] is TaskType.ORCHESTRATOR_PLAN
+    ]
+    assert len(plan_tasks) == 1
+    assert str(ASSESSMENT_ID) in str(plan_tasks[0]["idempotency_key"])
+    assert len(queue.sent) == 1
+    assert queue.sent[0].task_type is TaskType.ORCHESTRATOR_PLAN
+
+
+def test_non_satisfying_disposition_does_not_retick(
+    signing_key: rsa.RSAPrivateKey,
+) -> None:
+    repository = FakeRiskReviewRepository()
+    orchestration = FakeOrchestrationRepository()
+    queue = RecordingAgentQueue()
+    client = _build_client(
+        signing_key,
+        repository=repository,
+        orchestration_repository=orchestration,
+        agent_queue=queue,
+    )
+
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/risk-review/challenges/{CHALLENGE_ID}/disposition",
+        json={"dispositionType": "MAKER_MUST_REVISE", "rationale": "Can bo sung."},
+        headers={"Authorization": f"Bearer {token(signing_key)}"},
+    )
+
+    assert response.status_code == 201
+    assert orchestration.created_tasks == []
+    assert queue.sent == []
 
 
 def test_revise_then_accept_satisfies_g3_on_the_later_disposition(
