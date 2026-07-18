@@ -21,6 +21,7 @@ from creditops.application.ports.orchestration import (
     OrchestrationRepository,
 )
 from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
+from creditops.application.use_cases.dispatch_outbox import DispatchOutbox
 from creditops.application.use_cases.run_worker_once import (
     CheckpointCallback,
     StageResult,
@@ -35,8 +36,9 @@ _ENQUEUED_CHECKPOINT = "ENQUEUED"
 class OrchestratorPlanProcessor(TaskProcessor):
     """Run one idempotent advance for the case behind an ORCHESTRATOR_PLAN task."""
 
-    def __init__(self, advance: AdvanceCase) -> None:
+    def __init__(self, advance: AdvanceCase, *, dispatch: DispatchOutbox | None = None) -> None:
         self._advance = advance
+        self._dispatch = dispatch
 
     async def process(
         self,
@@ -64,10 +66,14 @@ class OrchestratorPlanProcessor(TaskProcessor):
             "TASKS_CREATED",
             {"createdTaskIds": [str(task_id) for task_id in result.created_task_ids]},
         )
+        if self._dispatch is not None:
+            # Best-effort publish of the freshly committed outbox events; a
+            # failure here leaves them durable for the recovery sweep.
+            await self._dispatch.run()
         await save_checkpoint(
             _ENQUEUED_CHECKPOINT,
             {
-                "enqueuedTaskIds": [str(task_id) for task_id in result.enqueued_task_ids],
+                "outboxedTaskIds": [str(task_id) for task_id in result.outboxed_task_ids],
                 "deadlock": result.deadlock is not None,
             },
         )

@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
-from test_advance import CASE_ID, FakeOrchestrationRepository, RecordingQueue
+from test_advance import CASE_ID, FakeOrchestrationRepository
 
 from creditops.application.orchestration.kickoff import (
     KickoffCaseNotFound,
@@ -15,10 +15,9 @@ from creditops.domain.tasks import TaskEnvelopeV1
 
 
 @pytest.mark.asyncio
-async def test_kickoff_enqueues_exactly_one_plan_task_per_case_version() -> None:
+async def test_kickoff_outboxes_exactly_one_plan_task_per_case_version() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
-    kickoff = KickoffOrchestration(repository, queue)
+    kickoff = KickoffOrchestration(repository)
 
     first = await kickoff.execute(CASE_ID)
     second = await kickoff.execute(CASE_ID)
@@ -26,8 +25,8 @@ async def test_kickoff_enqueues_exactly_one_plan_task_per_case_version() -> None
     assert first.created is True
     assert second.created is False
     assert second.task_id == first.task_id
-    assert len(queue.sent) == 1
-    envelope = queue.sent[0]
+    assert len(repository.outbox) == 1
+    envelope = TaskEnvelopeV1.model_validate(dict(repository.outbox[0].payload))
     assert envelope.task_type is TaskType.ORCHESTRATOR_PLAN
     assert envelope.document_version_id is None
     kickoff_events = [
@@ -42,9 +41,7 @@ async def test_kickoff_enqueues_exactly_one_plan_task_per_case_version() -> None
 @pytest.mark.asyncio
 async def test_kickoff_refuses_an_invisible_case() -> None:
     with pytest.raises(KickoffCaseNotFound):
-        await KickoffOrchestration(FakeOrchestrationRepository(), RecordingQueue()).execute(
-            uuid4()
-        )
+        await KickoffOrchestration(FakeOrchestrationRepository()).execute(uuid4())
 
 
 def test_legacy_envelope_without_task_type_still_parses_as_ingestion() -> None:

@@ -24,9 +24,11 @@ from creditops.application.ports.orchestration import (
     OrchestrationAuditEvent,
     OrchestrationSnapshot,
     OrchestrationTaskRow,
+    OutboxEventRow,
 )
 from creditops.domain.enums import TaskStatus
 from creditops.domain.orchestration import GateStatus, GateType, TaskType
+from creditops.domain.tasks import TaskEnvelopeV1
 from creditops.infrastructure.postgres.repositories import DatabaseConnection
 
 _AGENT_TASK_TYPES = tuple(
@@ -247,6 +249,30 @@ class PostgresOrchestrationRepository:
                         """,
                         (case_id, case_version, task_id, dependency_id),
                     )
+                # Transactional outbox (master design 14.2): the TASK_READY
+                # event commits atomically with the task row; DispatchOutbox
+                # performs the queue send afterwards.
+                envelope = TaskEnvelopeV1(
+                    task_id=task_id,
+                    case_id=case_id,
+                    case_version=case_version,
+                    task_type=task_type,
+                    document_version_id=None,
+                )
+                await connection.execute(
+                    """
+                    insert into public.outbox_events (
+                      case_id, case_version, event_type, aggregate_type,
+                      aggregate_id, payload
+                    ) values (%s, %s, 'TASK_READY', 'PROCESSING_TASK', %s, %s)
+                    """,
+                    (
+                        case_id,
+                        case_version,
+                        task_id,
+                        Jsonb(envelope.model_dump(mode="json")),
+                    ),
+                )
         return CreatedTask(
             row=OrchestrationTaskRow(
                 task_id=task_id,
@@ -292,6 +318,57 @@ class PostgresOrchestrationRepository:
                         schema_version,
                         model_version,
                     ),
+                )
+
+    async def load_undispatched_outbox(self, *, limit: int) -> tuple[OutboxEventRow, ...]:
+        async with self._connection_factory() as connection:
+            cursor = await connection.execute(
+                """
+                select id, case_id, case_version, event_type, payload,
+                       dispatch_attempts, dispatched_at
+                from public.outbox_events
+                where dispatched_at is null
+                order by created_at, id
+                limit %s
+                """,
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+        return tuple(
+            OutboxEventRow(
+                event_id=cast(UUID, row[0]),
+                case_id=cast(UUID, row[1]),
+                case_version=int(row[2]),
+                event_type=str(row[3]),
+                payload=cast(Mapping[str, object], row[4]),
+                dispatch_attempts=int(row[5]),
+                dispatched_at=cast("datetime | None", row[6]),
+            )
+            for row in rows
+        )
+
+    async def mark_outbox_dispatched(self, event_id: UUID) -> None:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    update public.outbox_events
+                    set dispatched_at = clock_timestamp()
+                    where id = %s and dispatched_at is null
+                    """,
+                    (event_id,),
+                )
+
+    async def record_outbox_dispatch_failure(self, event_id: UUID) -> None:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    update public.outbox_events
+                    set dispatch_attempts = dispatch_attempts + 1
+                    where id = %s and dispatched_at is null
+                    """,
+                    (event_id,),
                 )
 
     async def append_audit(self, event: OrchestrationAuditEvent) -> None:

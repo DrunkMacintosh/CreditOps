@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, cast
 from uuid import UUID
@@ -18,6 +19,8 @@ from creditops.application.orchestration.status import build_status
 from creditops.application.ports.orchestration import OrchestrationRepository
 from creditops.application.ports.queue import QueuePort
 from creditops.application.unit_of_work import ActorContext
+from creditops.application.use_cases.dispatch_outbox import DispatchOutbox
+from creditops.observability import log_event
 
 router = APIRouter(prefix="/api/v1/cases/{case_id}/orchestration", tags=["orchestration"])
 
@@ -152,7 +155,8 @@ async def advance_orchestration(
 ) -> AdvanceAcceptedResponse:
     _require_participant(actor)
     await _assert_case_access(request, actor, case_id)
-    kickoff = KickoffOrchestration(_repository(request), _queue(request))
+    repository = _repository(request)
+    kickoff = KickoffOrchestration(repository)
     try:
         result = await kickoff.execute(case_id)
     except KickoffCaseNotFound as exc:
@@ -161,6 +165,20 @@ async def advance_orchestration(
             code="CASE_NOT_ACCESSIBLE",
             message_vi="Không tìm thấy hồ sơ hoặc bạn không có quyền truy cập.",
         ) from exc
+    # Best-effort publish of committed outbox events.  The task row and its
+    # TASK_READY event are already durable; a failed send here is retried by
+    # the next dispatch run, so the 202 below stays truthful either way.
+    dispatched = await DispatchOutbox(repository, _queue(request)).run()
+    log_event(
+        logging.getLogger(__name__),
+        logging.INFO,
+        "Outbox dispatch after orchestration advance",
+        {
+            "event": "outbox_dispatch",
+            "dispatched": dispatched.dispatched,
+            "failed": dispatched.failed,
+        },
+    )
     return AdvanceAcceptedResponse(
         task_id=result.task_id,
         case_version=result.case_version,

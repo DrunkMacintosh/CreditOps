@@ -73,6 +73,25 @@ class CreatedTask:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class OutboxEventRow:
+    """One transactional-outbox event awaiting (or after) queue dispatch.
+
+    Written atomically with its domain mutation (master design section
+    14.2); the queue send happens only afterwards, from this row.  The
+    payload is the schema-versioned envelope to publish -- identifiers only,
+    never a document body or secret.
+    """
+
+    event_id: UUID
+    case_id: UUID
+    case_version: int
+    event_type: str
+    payload: Mapping[str, object]
+    dispatch_attempts: int = 0
+    dispatched_at: datetime | None = None
+
+
 class OrchestrationRepository(Protocol):
     async def load_snapshot(self, case_id: UUID) -> OrchestrationSnapshot | None: ...
 
@@ -115,3 +134,9 @@ class OrchestrationRepository(Protocol):
     ) -> None: ...
 
     async def append_audit(self, event: OrchestrationAuditEvent) -> None: ...
+
+    async def load_undispatched_outbox(self, *, limit: int) -> tuple[OutboxEventRow, ...]: ...
+
+    async def mark_outbox_dispatched(self, event_id: UUID) -> None: ...
+
+    async def record_outbox_dispatch_failure(self, event_id: UUID) -> None: ...

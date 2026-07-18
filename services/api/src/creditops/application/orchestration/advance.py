@@ -2,11 +2,13 @@
 
 Given a case it: derives and persists human gates, evaluates deterministic
 readiness, builds a plan (default or validated LLM proposal), ensures the next
-tasks exist and are enqueued, records planner-proposal history, and appends
-agent audit events.  Every write is idempotent (unique idempotency keys and
-gate keys), so a duplicate delivery or a duplicate advance produces no duplicate
-tasks or effects.  The orchestrator never writes a fact, finding, or conclusion
-and never resolves a gap, conflict, or challenge.
+tasks exist (each committed atomically with its TASK_READY outbox event —
+master design section 14.2; the separate ``DispatchOutbox`` use case performs
+the queue send), records planner-proposal history, and appends agent audit
+events.  Every write is idempotent (unique idempotency keys and gate keys), so
+a duplicate delivery or a duplicate advance produces no duplicate tasks or
+effects.  The orchestrator never writes a fact, finding, or conclusion and
+never resolves a gap, conflict, or challenge.
 """
 
 from __future__ import annotations
@@ -35,9 +37,7 @@ from creditops.application.ports.orchestration import (
     OrchestrationRepository,
     OrchestrationSnapshot,
 )
-from creditops.application.ports.queue import QueuePort
 from creditops.domain.orchestration import TaskType
-from creditops.domain.tasks import TaskEnvelopeV1
 
 
 class OrchestrationError(RuntimeError):
@@ -60,7 +60,9 @@ class AdvanceResult:
     readiness: ReadinessReport
     gates: tuple[GateRecord, ...]
     created_task_ids: tuple[UUID, ...]
-    enqueued_task_ids: tuple[UUID, ...]
+    #: Tasks whose TASK_READY outbox event was committed in this run; the
+    #: actual queue send happens in DispatchOutbox.
+    outboxed_task_ids: tuple[UUID, ...]
     superseded_task_ids: tuple[str, ...]
     deadlock: Deadlock | None
 
@@ -73,7 +75,6 @@ class AdvanceCase:
     def __init__(
         self,
         repository: OrchestrationRepository,
-        queue: QueuePort,
         planner: OrchestrationPlanner,
         *,
         template: DependencyTemplate | None = None,
@@ -82,7 +83,6 @@ class AdvanceCase:
         execution_id_factory: Callable[[], UUID] | None = None,
     ) -> None:
         self._repository = repository
-        self._queue = queue
         self._planner = planner
         self._template = template or DependencyTemplate.canonical()
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -108,7 +108,7 @@ class AdvanceCase:
         )
         await self._record_proposal(snapshot, execution_id, now, outcome)
 
-        created_ids, enqueued_ids = await self._schedule(graphed, outcome.plan)
+        created_ids = await self._schedule(graphed, outcome.plan)
 
         deadlock = detect_deadlock(readiness.state_map(), readiness.reason_map())
         if deadlock is not None:
@@ -137,7 +137,7 @@ class AdvanceCase:
                 "planSource": outcome.plan.source,
                 "proposalStatus": outcome.status,
                 "createdTaskIds": [str(task_id) for task_id in created_ids],
-                "enqueuedTaskIds": [str(task_id) for task_id in enqueued_ids],
+                "outboxedTaskIds": [str(task_id) for task_id in created_ids],
                 "readiness": {
                     assessment.task_type.value: assessment.readiness.value
                     for assessment in readiness.assessments
@@ -158,7 +158,7 @@ class AdvanceCase:
             readiness=readiness,
             gates=gates,
             created_task_ids=created_ids,
-            enqueued_task_ids=enqueued_ids,
+            outboxed_task_ids=created_ids,
             superseded_task_ids=readiness.superseded_task_ids,
             deadlock=deadlock,
         )
@@ -184,14 +184,13 @@ class AdvanceCase:
         self,
         snapshot: OrchestrationSnapshot,
         plan: Plan,
-    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]:
+    ) -> tuple[UUID, ...]:
         current_task_id_by_type = {
             task.task_type: task.task_id
             for task in snapshot.tasks
             if task.case_version == snapshot.case_version
         }
         created: list[UUID] = []
-        enqueued: list[UUID] = []
         for step in plan.steps:
             node = self._template.by_type[step.task_type]
             depends_on = tuple(
@@ -216,21 +215,13 @@ class AdvanceCase:
                 depends_on=depends_on,
             )
             if not result.created:
-                # A prior advance already created (and enqueued) this task; the
-                # unique idempotency key deduplicates, so there is nothing new to
-                # enqueue.  Duplicate delivery therefore has no duplicate effect.
+                # A prior advance already created (and outboxed) this task; the
+                # unique idempotency key deduplicates, so there is nothing new
+                # to publish.  Duplicate delivery therefore has no duplicate
+                # effect.
                 continue
             created.append(result.row.task_id)
-            envelope = TaskEnvelopeV1(
-                task_id=result.row.task_id,
-                case_id=snapshot.case_id,
-                case_version=snapshot.case_version,
-                task_type=step.task_type,
-                document_version_id=None,
-            )
-            await self._queue.send(envelope)
-            enqueued.append(result.row.task_id)
-        return tuple(created), tuple(enqueued)
+        return tuple(created)
 
     async def _record_proposal(
         self,
