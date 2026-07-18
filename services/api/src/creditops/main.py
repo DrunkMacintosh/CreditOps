@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.responses import Response
 from starlette.types import ExceptionHandler
 
+from creditops.api.audit import router as audit_router
 from creditops.api.auth import JwtVerifier, RemoteJwksKeyResolver
 from creditops.api.cases import router as cases_router
 from creditops.api.credit_ops import router as credit_ops_router
@@ -20,6 +21,7 @@ from creditops.api.errors import (
     validation_exception_handler,
 )
 from creditops.api.gap_requests import router as gap_requests_router
+from creditops.api.intake import router as intake_router
 from creditops.api.legal import router as legal_router
 from creditops.api.orchestration import router as orchestration_router
 from creditops.api.risk_review import router as risk_review_router
@@ -35,6 +37,7 @@ from creditops.infrastructure.postgres.credit_ops import PostgresCreditOpsReposi
 from creditops.infrastructure.postgres.gap_request_batches import (
     PostgresGapRequestRepository,
 )
+from creditops.infrastructure.postgres.intake import PostgresIntakeRepository
 from creditops.infrastructure.postgres.legal import PostgresLegalRepository
 from creditops.infrastructure.postgres.orchestration import (
     PostgresOrchestrationRepository,
@@ -154,6 +157,11 @@ def create_app(
         if database_connection_factory is not None
         else None
     )
+    application.state.intake_repository = (
+        PostgresIntakeRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
     application.state.worker_dispatcher = (
         CloudRunDispatcher(
             project_id=cast(str, configured.gcp_project_id),
@@ -201,6 +209,8 @@ def create_app(
     application.include_router(risk_review_router)
     application.include_router(credit_ops_router)
     application.include_router(gap_requests_router)
+    application.include_router(audit_router)
+    application.include_router(intake_router)
     return application
 
 
