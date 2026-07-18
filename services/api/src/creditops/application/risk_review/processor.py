@@ -1,23 +1,38 @@
-"""Worker processor for INDEPENDENT_RISK_REVIEW tasks.
+"""Worker processor for INDEPENDENT_RISK_REVIEW tasks (two-pass checker).
 
 Registered in the per-task-type ProcessorRegistry exactly like
-CREDIT_UNDERWRITING and LEGAL_COMPLIANCE_COLLATERAL.  Stages are checkpointed
-(evidence view -> maker outputs loaded -> pre-analysis computed -> inference
-validated -> persisted) so a redelivery resumes from the latest checkpoint;
-the persist itself is idempotent on (case, case version, task), making
-duplicate delivery harmless.
+CREDIT_UNDERWRITING and LEGAL_COMPLIANCE_COLLATERAL.  The independent risk
+review runs in two passes (design stage 6):
 
-Two fail-closed paths beyond the shared "no gateway" policy:
+- Pass A -- BLIND pre-analysis.  The checker reads only the blind evidence
+  view (Confirmed Facts) and forms an INDEPENDENT, structured pre-analysis
+  BEFORE seeing any maker conclusion.  Persisted to its own append-only store,
+  deduplicated per (case, version, task).
+- Pass B -- the checker assessment as before, now receiving BOTH the maker/
+  legal artifacts AND the Pass A blind pre-analysis, marking per challenge
+  whether the concern was also surfaced blind (``Challenge.raised_blind``).
 
+Stages are checkpointed (evidence view -> maker outputs loaded -> blind
+pre-analysis persisted -> deterministic pre-analysis computed -> inference
+validated -> persisted).  A redelivery resumes from the latest checkpoint; the
+blind-pass persist and the Pass B persist are each idempotent on (case, case
+version, task), making duplicate delivery harmless and keeping exactly one
+blind pre-analysis row per task even across a Pass A crash.
+
+Fail-closed paths beyond the shared "no gateway" policy:
+
+- No configured reasoning endpoint (either pass): both passes fail closed
+  (FAILED_MANUAL_REVIEW) -- no fabricated analysis.
 - Readiness already requires both maker handoffs at the task-graph level
   (application/orchestration/graph.py); this processor re-checks at execution
-  time that BOTH maker outputs are actually loadable and fails closed
-  (FAILED_MANUAL_REVIEW) if either is missing -- defense in depth against a
-  graph/readiness bug ever letting a partial pair through.
-- The same-execution guard: if this checker execution's id would equal
-  either reviewed maker's execution id, the task fails closed BEFORE any
-  model call -- "the same role execution must not author and independently
-  clear the same material conclusion."
+  time that BOTH maker outputs are actually loadable and fails closed if
+  either is missing -- defense in depth.
+- The same-execution guard: if this checker execution's id would equal either
+  reviewed maker's execution id, the task fails closed BEFORE any model call
+  (including the blind Pass A call) -- "the same role execution must not
+  author and independently clear the same material conclusion."  Maker outputs
+  are loaded first only for this control-plane guard; their conclusions never
+  enter Pass A's reasoning context.
 """
 
 from __future__ import annotations
@@ -37,13 +52,19 @@ from creditops.application.ports.orchestration import OrchestrationAuditEvent
 from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
 from creditops.application.ports.risk_review import (
     PersistedCheckerOutput,
+    PreAnalysisRecord,
     RiskReviewRepository,
 )
 from creditops.application.risk_review.analysis import compute_deterministic_pre_analysis
 from creditops.application.risk_review.checker import (
+    PRE_ANALYSIS_PROMPT_VERSION,
+    PRE_ANALYSIS_SCHEMA_VERSION,
     CheckerOutputInvalid,
     CheckerRunContext,
+    PreAnalysisOutputInvalid,
+    RiskPreAnalysis,
     RunCheckerInference,
+    RunPreAnalysisInference,
     SameExecutionGuardTriggered,
     persist_checker_output,
 )
@@ -57,6 +78,9 @@ from creditops.domain.risk_review import RISK_REVIEW_AGENT_ROLE, RiskReviewAsses
 
 CHECKPOINT_EVIDENCE_VIEW = "EVIDENCE_VIEW_BUILT"
 CHECKPOINT_MAKER_OUTPUTS = "MAKER_OUTPUTS_LOADED"
+#: Pass A (blind pre-analysis) persisted: a resume from here skips the blind
+#: model call and goes straight into Pass B.
+CHECKPOINT_PRE_ANALYSIS_PERSISTED = "PRE_ANALYSIS_PERSISTED"
 CHECKPOINT_PRE_ANALYSIS = "PRE_ANALYSIS_COMPUTED"
 CHECKPOINT_INFERENCE = "INFERENCE_VALIDATED"
 CHECKPOINT_PERSISTED = "ASSESSMENT_PERSISTED"
@@ -69,12 +93,20 @@ class IndependentRiskReviewProcessor:
         self,
         repository: RiskReviewRepository,
         inference: RunCheckerInference | None,
+        pre_analysis_inference: RunPreAnalysisInference | None = None,
         *,
         clock: Callable[[], datetime] | None = None,
         execution_id_factory: Callable[[], UUID] | None = None,
     ) -> None:
         self._repository = repository
         self._inference = inference
+        # Worker composition wires only the Pass B runner; derive the blind
+        # Pass A runner over the very same reasoning endpoint when one is not
+        # injected explicitly, so both passes share one endpoint and both are
+        # disabled together when reasoning is unavailable.
+        if pre_analysis_inference is None and inference is not None:
+            pre_analysis_inference = RunPreAnalysisInference(inference.gateway)
+        self._pre_analysis_inference = pre_analysis_inference
         self._clock = clock or (lambda: datetime.now(UTC))
         self._execution_id_factory = execution_id_factory or uuid4
 
@@ -99,7 +131,7 @@ class IndependentRiskReviewProcessor:
             await self._save_persisted_checkpoint(save_checkpoint, existing)
             return StageResult()
 
-        if self._inference is None:
+        if self._inference is None or self._pre_analysis_inference is None:
             await self._audit(
                 task,
                 "RISK_REVIEW_GATEWAY_UNAVAILABLE",
@@ -181,6 +213,12 @@ class IndependentRiskReviewProcessor:
             },
         )
 
+        # ---- Pass A: blind pre-analysis (skipped on resume / when durable) ----
+        blind = await self._resolve_pre_analysis(task, checkpoint, save_checkpoint)
+        if isinstance(blind, StageResult):
+            return blind
+
+        # ---- Pass B: checker assessment, now fed the blind pre-analysis ----
         open_gaps = await self._repository.load_open_gaps(task.case_id, task.case_version)
         pre_analysis = compute_deterministic_pre_analysis(
             underwriting=underwriting, legal=legal, checker_view=view, open_gaps=open_gaps
@@ -207,6 +245,7 @@ class IndependentRiskReviewProcessor:
                 policy_hits=legal.policy_hits,
                 controlled_check_results=legal.controlled_check_results,
                 run=run,
+                blind_pre_analysis=blind,
             )
         except InferenceUnavailableError:
             await self._audit(
@@ -234,6 +273,111 @@ class IndependentRiskReviewProcessor:
             CHECKPOINT_INFERENCE, {"assessment": assessment.model_dump(mode="json")}
         )
         return await self._persist_stage(task, assessment, save_checkpoint)
+
+    async def _resolve_pre_analysis(
+        self,
+        task: TaskRecord,
+        checkpoint: TaskCheckpoint | None,
+        save_checkpoint: CheckpointCallback,
+    ) -> RiskPreAnalysis | StageResult:
+        """Return the blind Pass A pre-analysis, running it only if necessary.
+
+        Returns a ``StageResult`` instead when Pass A must abort (no evidence
+        view, superseded case version, endpoint unavailable, or an invalid
+        blind output).  Resumes without a model call from either the
+        ``PRE_ANALYSIS_PERSISTED`` checkpoint or, if that was lost, the durable
+        blind-pre-analysis row -- either way exactly one blind row exists.
+        """
+
+        assert self._pre_analysis_inference is not None
+
+        if (
+            checkpoint is not None
+            and checkpoint.checkpoint_type == CHECKPOINT_PRE_ANALYSIS_PERSISTED
+        ):
+            return self._pre_analysis_from_checkpoint(checkpoint)
+
+        found = await self._repository.find_pre_analysis(
+            case_id=task.case_id, case_version=task.case_version, task_id=task.id
+        )
+        if found is not None:
+            return RiskPreAnalysis.model_validate(dict(found.analysis))
+
+        blind_view = await self._repository.load_blind_evidence_view(task.case_id)
+        if blind_view is None:
+            return StageResult(
+                WorkerOutcome.FAILED_MANUAL_REVIEW,
+                f"case {task.case_id} has no evidence view for the blind pass",
+            )
+        if blind_view.case_version != task.case_version:
+            return StageResult(
+                WorkerOutcome.SUPERSEDED, "case version advanced past this task's bound version"
+            )
+
+        pre_execution_id = self._execution_id_factory()
+        try:
+            blind = await self._pre_analysis_inference.infer(
+                view=blind_view, correlation_id=f"risk-review-blind:{task.id}"
+            )
+        except InferenceUnavailableError:
+            await self._audit(
+                task,
+                "RISK_REVIEW_GATEWAY_UNAVAILABLE",
+                {"reason": "FPT reasoning endpoint unavailable", "pass": "A"},
+            )
+            return StageResult(
+                WorkerOutcome.FAILED_MANUAL_REVIEW, "FPT reasoning endpoint unavailable"
+            )
+        except (PreAnalysisOutputInvalid, InferenceError, ValidationError) as exc:
+            await self._audit(
+                task, "RISK_REVIEW_PRE_ANALYSIS_REJECTED", {"reason": str(exc)[:2000]}
+            )
+            return StageResult(
+                WorkerOutcome.RETRY_WAIT, f"blind pre-analysis rejected: {exc}"
+            )
+
+        persisted = await self._repository.persist_pre_analysis(
+            record=PreAnalysisRecord(
+                id=uuid4(),
+                case_id=task.case_id,
+                case_version=task.case_version,
+                task_id=task.id,
+                execution_id=pre_execution_id,
+                prompt_version=PRE_ANALYSIS_PROMPT_VERSION,
+                schema_version=PRE_ANALYSIS_SCHEMA_VERSION,
+                analysis=blind.model_dump(mode="json"),
+            )
+        )
+        await save_checkpoint(
+            CHECKPOINT_PRE_ANALYSIS_PERSISTED,
+            {
+                "preAnalysisId": str(persisted.pre_analysis_id),
+                "executionId": str(pre_execution_id),
+                "independentRiskCount": len(blind.independent_risks),
+                "observationCount": len(blind.observations),
+                "analysis": blind.model_dump(mode="json"),
+            },
+        )
+        await self._audit(
+            task,
+            "RISK_REVIEW_PRE_ANALYSIS_PERSISTED",
+            {
+                "preAnalysisId": str(persisted.pre_analysis_id),
+                "created": persisted.created,
+                "independentRiskCount": len(blind.independent_risks),
+                "observationCount": len(blind.observations),
+            },
+        )
+        # The durable payload wins on an idempotent conflict, so a redelivery
+        # that raced ahead cannot diverge Pass B's blind input from the row.
+        return RiskPreAnalysis.model_validate(dict(persisted.analysis))
+
+    @staticmethod
+    def _pre_analysis_from_checkpoint(checkpoint: TaskCheckpoint) -> RiskPreAnalysis:
+        raw = checkpoint.checkpoint_data.get("analysis")
+        if not isinstance(raw, Mapping):
+            raise PreAnalysisOutputInvalid("pre-analysis checkpoint has no analysis payload")
+        return RiskPreAnalysis.model_validate(dict(raw))
 
     async def _persist_stage(
         self,

@@ -38,12 +38,17 @@ from creditops.application.ports.risk_review import (
     MakerOutputsView,
     OpenGapRecord,
     PersistedCheckerOutput,
+    PersistedPreAnalysis,
+    PreAnalysisEvidenceView,
+    PreAnalysisRecord,
     ProvisionalGapRecord,
 )
 from creditops.application.risk_review.checker import (
     OPERATIONS_HANDOFF_STATE,
     CheckerPrompt,
+    PreAnalysisPrompt,
     RunCheckerInference,
+    RunPreAnalysisInference,
     build_response_schema,
 )
 from creditops.application.risk_review.evidence import build_target_universe
@@ -53,6 +58,7 @@ from creditops.application.risk_review.processor import (
     CHECKPOINT_MAKER_OUTPUTS,
     CHECKPOINT_PERSISTED,
     CHECKPOINT_PRE_ANALYSIS,
+    CHECKPOINT_PRE_ANALYSIS_PERSISTED,
     IndependentRiskReviewProcessor,
 )
 from creditops.application.use_cases.run_worker_once import (
@@ -246,6 +252,39 @@ def valid_payload(
     }
 
 
+def blind_payload() -> dict[str, Any]:
+    """A valid Pass A (blind) payload citing only a live Confirmed Fact."""
+
+    return {
+        "independent_risks": [
+            {
+                "description_vi": "Doanh thu phu thuoc mot nguon, can theo doi doc lap.",
+                "citations": [
+                    {"kind": "CONFIRMED_FACT", "confirmed_fact_id": str(LIVE_FACT_ID)}
+                ],
+                "severity": "MEDIUM",
+                "confidence": "MEDIUM",
+            }
+        ],
+        "observations": [],
+    }
+
+
+def _is_pass_a(request: ReasonRequest) -> bool:
+    props = request.response_schema.get("properties", {})
+    return "independent_risks" in props
+
+
+def dispatched(pass_b: Mapping[str, Any]) -> Callable[[ReasonRequest], Mapping[str, Any]]:
+    """One gateway factory serving BOTH passes: blind payload for Pass A's
+    schema, the given Pass B payload otherwise."""
+
+    def factory(request: ReasonRequest) -> Mapping[str, Any]:
+        return blind_payload() if _is_pass_a(request) else pass_b
+
+    return factory
+
+
 class FakeGateway:
     def __init__(
         self,
@@ -330,11 +369,54 @@ class FakeRiskReviewRepository:
         self.audit_events: list[OrchestrationAuditEvent] = []
         self.gap_rows: list[ProvisionalGapRecord] = []
         self.persist_calls = 0
+        self.pre_analyses: dict[tuple[UUID, int, UUID], PreAnalysisRecord] = {}
+        self.pre_analysis_persist_calls = 0
+        self.evidence_view_loads = 0
+        self.blind_view_loads = 0
 
     async def load_evidence_view(self, case_id: UUID) -> CheckerEvidenceView | None:
+        self.evidence_view_loads += 1
         if self.view is not None and self.view.case_id == case_id:
             return self.view
         return None
+
+    async def load_blind_evidence_view(
+        self, case_id: UUID
+    ) -> PreAnalysisEvidenceView | None:
+        self.blind_view_loads += 1
+        if self.view is None or self.view.case_id != case_id:
+            return None
+        return PreAnalysisEvidenceView(
+            case_id=self.view.case_id,
+            case_version=self.view.case_version,
+            built_at=self.view.built_at,
+            confirmed_facts=self.view.confirmed_facts,
+        )
+
+    async def find_pre_analysis(
+        self, *, case_id: UUID, case_version: int, task_id: UUID
+    ) -> PersistedPreAnalysis | None:
+        found = self.pre_analyses.get((case_id, case_version, task_id))
+        if found is None:
+            return None
+        return PersistedPreAnalysis(
+            pre_analysis_id=found.id, analysis=found.analysis, created=False
+        )
+
+    async def persist_pre_analysis(
+        self, *, record: PreAnalysisRecord
+    ) -> PersistedPreAnalysis:
+        self.pre_analysis_persist_calls += 1
+        key = (record.case_id, record.case_version, record.task_id)
+        existing = self.pre_analyses.get(key)
+        if existing is not None:
+            return PersistedPreAnalysis(
+                pre_analysis_id=existing.id, analysis=existing.analysis, created=False
+            )
+        self.pre_analyses[key] = record
+        return PersistedPreAnalysis(
+            pre_analysis_id=record.id, analysis=record.analysis, created=True
+        )
 
     async def load_maker_outputs(self, case_id: UUID, case_version: int) -> MakerOutputsView:
         del case_id, case_version
@@ -444,8 +526,17 @@ def build_processor(
         if gateway is not None
         else None
     )
+    pre_analysis_inference = (
+        RunPreAnalysisInference(gateway, prompt=PreAnalysisPrompt("blind-prompt-vi-test"))
+        if gateway is not None
+        else None
+    )
     return IndependentRiskReviewProcessor(
-        repository, inference, clock=lambda: NOW, execution_id_factory=execution_id_factory
+        repository,
+        inference,
+        pre_analysis_inference,
+        clock=lambda: NOW,
+        execution_id_factory=execution_id_factory,
     )
 
 
@@ -461,7 +552,7 @@ async def test_happy_path_persists_challenges_and_operations_handoff() -> None:
         legal_execution_id=legal.provenance.execution_id,
     )
     gateway = FakeGateway(
-        lambda request: valid_payload(underwriting, legal), validate_against_schema=True
+        dispatched(valid_payload(underwriting, legal)), validate_against_schema=True
     )
     processor = build_processor(repository, gateway)
     recorder = CheckpointRecorder()
@@ -472,10 +563,15 @@ async def test_happy_path_persists_challenges_and_operations_handoff() -> None:
     assert recorder.types() == [
         CHECKPOINT_EVIDENCE_VIEW,
         CHECKPOINT_MAKER_OUTPUTS,
+        CHECKPOINT_PRE_ANALYSIS_PERSISTED,
         CHECKPOINT_PRE_ANALYSIS,
         CHECKPOINT_INFERENCE,
         CHECKPOINT_PERSISTED,
     ]
+    # Pass A ran once and persisted exactly one blind pre-analysis row.
+    assert repository.pre_analysis_persist_calls == 1
+    assert len(repository.pre_analyses) == 1
+    assert repository.blind_view_loads == 1
     (handoff,) = repository.handoffs.values()
     assert handoff.state == OPERATIONS_HANDOFF_STATE == "READY_FOR_OPERATIONS"
     (assessment,) = repository.assessments.values()
@@ -501,24 +597,22 @@ async def test_fabricated_target_id_is_rejected_not_persisted() -> None:
     underwriting = build_underwriting()
     legal = build_legal()
 
-    def poisoned(request: ReasonRequest) -> Mapping[str, Any]:
-        payload = valid_payload(underwriting, legal)
-        payload["challenges"][0]["target"] = {
-            "maker_source": "CREDIT_UNDERWRITING",
-            "maker_assessment_id": str(underwriting.id),
-            "section_path": "risks[999]",  # does not exist
+    poisoned_pass_b = valid_payload(underwriting, legal)
+    poisoned_pass_b["challenges"][0]["target"] = {
+        "maker_source": "CREDIT_UNDERWRITING",
+        "maker_assessment_id": str(underwriting.id),
+        "section_path": "risks[999]",  # does not exist
+    }
+    poisoned_pass_b["challenges"][0]["citations"] = [
+        {
+            "kind": "MAKER_FINDING",
+            "ref": {
+                "maker_source": "CREDIT_UNDERWRITING",
+                "maker_assessment_id": str(underwriting.id),
+                "section_path": "risks[999]",
+            },
         }
-        payload["challenges"][0]["citations"] = [
-            {
-                "kind": "MAKER_FINDING",
-                "ref": {
-                    "maker_source": "CREDIT_UNDERWRITING",
-                    "maker_assessment_id": str(underwriting.id),
-                    "section_path": "risks[999]",
-                },
-            }
-        ]
-        return payload
+    ]
 
     repository = FakeRiskReviewRepository(
         view=checker_view(),
@@ -527,7 +621,7 @@ async def test_fabricated_target_id_is_rejected_not_persisted() -> None:
         legal=legal,
         legal_execution_id=legal.provenance.execution_id,
     )
-    processor = build_processor(repository, FakeGateway(poisoned))
+    processor = build_processor(repository, FakeGateway(dispatched(poisoned_pass_b)))
 
     result = await processor.process(checker_task(), None, CheckpointRecorder().save)
 
@@ -685,7 +779,7 @@ async def test_resume_from_inference_checkpoint_skips_model_call() -> None:
         legal=legal,
         legal_execution_id=legal.provenance.execution_id,
     )
-    gateway = FakeGateway(lambda request: valid_payload(underwriting, legal))
+    gateway = FakeGateway(dispatched(valid_payload(underwriting, legal)))
     processor = build_processor(repository, gateway)
     recorder = CheckpointRecorder()
     await processor.process(checker_task(), None, recorder.save)
@@ -727,7 +821,7 @@ async def test_redelivery_after_terminal_checkpoint_is_noop() -> None:
         legal_execution_id=legal.provenance.execution_id,
     )
     processor = build_processor(
-        repository, FakeGateway(lambda request: valid_payload(underwriting, legal))
+        repository, FakeGateway(dispatched(valid_payload(underwriting, legal)))
     )
     recorder = CheckpointRecorder()
     await processor.process(checker_task(), None, recorder.save)
@@ -754,7 +848,7 @@ async def test_redelivery_without_checkpoint_finds_durable_output_idempotently()
         legal_execution_id=legal.provenance.execution_id,
     )
     first = build_processor(
-        repository, FakeGateway(lambda request: valid_payload(underwriting, legal))
+        repository, FakeGateway(dispatched(valid_payload(underwriting, legal)))
     )
     await first.process(checker_task(), None, CheckpointRecorder().save)
 
@@ -916,7 +1010,7 @@ async def test_worker_loop_dispatches_registered_checker_processor() -> None:
     registry = ProcessorRegistry(
         {
             TaskType.INDEPENDENT_RISK_REVIEW: build_processor(
-                repository, FakeGateway(lambda request: valid_payload(underwriting, legal))
+                repository, FakeGateway(dispatched(valid_payload(underwriting, legal)))
             )
         },
         fallback=ManualReviewProcessor(_NullOrchestrationRepository(), clock=lambda: NOW),

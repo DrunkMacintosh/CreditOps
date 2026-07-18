@@ -22,14 +22,15 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import resources
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from creditops.application.ports.model_gateway import InferenceGateway, ReasonRequest
 from creditops.application.ports.risk_review import (
     CheckerEvidenceView,
+    PreAnalysisEvidenceView,
     ProvisionalGapRecord,
     RiskReviewRepository,
 )
@@ -70,6 +71,12 @@ RISK_REVIEW_PROMPT_VERSION = "risk-review-prompt-v1"
 RISK_REVIEW_SCHEMA_VERSION = "risk-review-assessment-v1"
 OPERATIONS_HANDOFF_STATE = "READY_FOR_OPERATIONS"
 
+#: Pass A (blind pre-analysis) versions.  Distinct from the Pass B checker
+#: assessment versions above: Pass A is a separate model execution over the
+#: blind evidence view, persisted to its own append-only store.
+PRE_ANALYSIS_PROMPT_VERSION = "risk-pre-analysis-prompt-v1"
+PRE_ANALYSIS_SCHEMA_VERSION = "risk-pre-analysis-v1"
+
 
 class CheckerOutputInvalid(ValueError):
     """The LLM response failed deterministic validation; bounded retry applies."""
@@ -105,6 +112,294 @@ class CheckerPrompt:
     @property
     def text(self) -> str:
         return self._text
+
+
+# ===========================================================================
+# Pass A: blind pre-analysis.
+#
+# The checker reads ONLY the blind evidence view (Confirmed Facts) and forms an
+# independent, STRUCTURED pre-analysis -- typed independent risks and
+# observations, each cited to a Confirmed Fact -- BEFORE it is ever shown a
+# maker conclusion.  The closed response schema admits exactly one citation
+# kind, CONFIRMED_FACT; the validator rejects any maker-artifact citation kind
+# so a well-formed Pass A output structurally cannot reference maker content.
+# This is not chain-of-thought: only the typed fields below are persisted.
+# ===========================================================================
+
+
+class PreAnalysisOutputInvalid(ValueError):
+    """The Pass A payload failed deterministic validation; bounded retry applies."""
+
+
+class IndependentRisk(BaseModel):
+    """One risk the blind pass judges the evidence itself raises."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    description_vi: str = Field(min_length=1, max_length=4000)
+    citations: tuple[ConfirmedFactCitation, ...] = Field(min_length=1)
+    severity: ChallengeSeverity
+    confidence: ConfidenceLevel
+
+
+class IndependentObservation(BaseModel):
+    """One noteworthy observation the blind pass makes about the evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    statement_vi: str = Field(min_length=1, max_length=4000)
+    citations: tuple[ConfirmedFactCitation, ...] = Field(min_length=1)
+    confidence: ConfidenceLevel
+
+
+class RiskPreAnalysis(BaseModel):
+    """The blind Pass A artifact: independent risks/observations, evidence-cited.
+
+    A structured document, never free reasoning and never a decision: there is
+    no approve/reject/clear/resolve/override field anywhere in it, and every
+    citation resolves to a Confirmed Fact, never to a maker passage.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["risk-pre-analysis-v1"] = "risk-pre-analysis-v1"
+    independent_risks: tuple[IndependentRisk, ...] = ()
+    observations: tuple[IndependentObservation, ...] = ()
+
+    def cited_confirmed_fact_ids(self) -> frozenset[str]:
+        """Every Confirmed Fact id cited by any independent risk or observation.
+
+        Pass B uses this to mark, per challenge, whether the concern was ALSO
+        surfaced blind (``Challenge.raised_blind``) via shared evidence.
+        """
+
+        ids: set[str] = set()
+        for risk in self.independent_risks:
+            ids.update(str(citation.confirmed_fact_id) for citation in risk.citations)
+        for observation in self.observations:
+            ids.update(str(citation.confirmed_fact_id) for citation in observation.citations)
+        return frozenset(ids)
+
+
+class PreAnalysisPrompt:
+    """Load the versioned Vietnamese trusted-instruction blind Pass A prompt."""
+
+    version = PRE_ANALYSIS_PROMPT_VERSION
+
+    def __init__(self, text: str | None = None) -> None:
+        self._text = text if text is not None else self._load()
+
+    @staticmethod
+    def _load() -> str:
+        return (
+            resources.files("creditops.prompts.risk_review")
+            .joinpath("pre_analysis_v1.md")
+            .read_text(encoding="utf-8")
+        )
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+
+def _confirmed_fact_citation_schema(fact_ids: Sequence[str]) -> Mapping[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["kind", "confirmed_fact_id"],
+        "properties": {
+            "kind": {"const": "CONFIRMED_FACT"},
+            "confirmed_fact_id": {"type": "string", "enum": list(fact_ids)},
+        },
+    }
+
+
+def build_pre_analysis_response_schema(*, fact_ids: Sequence[str]) -> Mapping[str, Any]:
+    """Closed Pass A schema.  CONFIRMED_FACT is the ONLY citation kind allowed.
+
+    With no Confirmed Facts in scope there is nothing the blind pass can cite,
+    so the risk/observation arrays are structurally forced empty rather than
+    building an unsatisfiable ``enum: []`` citation branch (mirrors the Pass B
+    empty-corpus abstention pattern).
+    """
+
+    if fact_ids:
+        citation = _confirmed_fact_citation_schema(fact_ids)
+        citations_array = {"type": "array", "minItems": 1, "maxItems": 10, "items": citation}
+        risk_item: Mapping[str, Any] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["description_vi", "citations", "severity", "confidence"],
+            "properties": {
+                "description_vi": {"type": "string", "minLength": 1, "maxLength": 4000},
+                "citations": citations_array,
+                "severity": {"enum": [item.value for item in ChallengeSeverity]},
+                "confidence": {"enum": [item.value for item in ConfidenceLevel]},
+            },
+        }
+        observation_item: Mapping[str, Any] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["statement_vi", "citations", "confidence"],
+            "properties": {
+                "statement_vi": {"type": "string", "minLength": 1, "maxLength": 4000},
+                "citations": citations_array,
+                "confidence": {"enum": [item.value for item in ConfidenceLevel]},
+            },
+        }
+        risks_schema: Mapping[str, Any] = {"type": "array", "maxItems": 30, "items": risk_item}
+        observations_schema: Mapping[str, Any] = {
+            "type": "array",
+            "maxItems": 30,
+            "items": observation_item,
+        }
+    else:
+        risks_schema = {"type": "array", "maxItems": 0}
+        observations_schema = {"type": "array", "maxItems": 0}
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["independent_risks", "observations"],
+        "properties": {
+            "independent_risks": risks_schema,
+            "observations": observations_schema,
+        },
+    }
+
+
+def build_blind_untrusted_context(*, view: PreAnalysisEvidenceView) -> str:
+    """Serialize the BLIND evidence for Pass A's untrusted-data region.
+
+    Carries Confirmed Facts only -- no maker or legal content of any kind, so
+    the blind pass literally has no maker conclusion to react to.
+    """
+
+    payload: dict[str, Any] = {
+        "caseId": str(view.case_id),
+        "caseVersion": view.case_version,
+        "confirmedFacts": [
+            {
+                "confirmedFactId": str(fact.confirmed_fact_id),
+                "fieldKey": fact.field_key,
+                "value": fact.value,
+            }
+            for fact in view.confirmed_facts
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _pre_analysis_citations_from(
+    raw: Sequence[Mapping[str, Any]], *, known_fact_ids: set[str]
+) -> tuple[ConfirmedFactCitation, ...]:
+    citations: list[ConfirmedFactCitation] = []
+    for item in raw:
+        kind = item.get("kind")
+        if kind in ("MAKER_FINDING", "CALCULATOR_RESULT", "POLICY_CITATION", "CONTROLLED_CHECK"):
+            raise PreAnalysisOutputInvalid(
+                "blind pre-analysis may not cite a maker-artifact citation kind: "
+                f"{kind!r}"
+            )
+        if kind != "CONFIRMED_FACT":
+            raise PreAnalysisOutputInvalid(
+                f"blind pre-analysis may only cite CONFIRMED_FACT, got {kind!r}"
+            )
+        fact_id = str(item.get("confirmed_fact_id", ""))
+        if fact_id not in known_fact_ids:
+            raise PreAnalysisOutputInvalid(
+                f"blind pre-analysis cites a confirmed fact outside scope: {fact_id}"
+            )
+        citations.append(ConfirmedFactCitation(confirmed_fact_id=UUID(fact_id)))
+    return tuple(citations)
+
+
+class BuildPreAnalysis:
+    """Deterministically validate a Pass A payload into a ``RiskPreAnalysis``."""
+
+    def build(
+        self, *, payload: Mapping[str, Any], view: PreAnalysisEvidenceView
+    ) -> RiskPreAnalysis:
+        try:
+            return self._build(payload=payload, view=view)
+        except (ValidationError, ValueError, TypeError, KeyError) as exc:
+            if isinstance(exc, PreAnalysisOutputInvalid):
+                raise
+            raise PreAnalysisOutputInvalid(f"blind pre-analysis rejected: {exc}") from exc
+
+    def _build(
+        self, *, payload: Mapping[str, Any], view: PreAnalysisEvidenceView
+    ) -> RiskPreAnalysis:
+        known_fact_ids = {str(fact.confirmed_fact_id) for fact in view.confirmed_facts}
+
+        raw_risks = payload.get("independent_risks", [])
+        if not isinstance(raw_risks, list):
+            raise PreAnalysisOutputInvalid("independent_risks must be a list")
+        risks = tuple(
+            IndependentRisk(
+                description_vi=str(item.get("description_vi", "")),
+                citations=_pre_analysis_citations_from(
+                    list(item.get("citations", [])), known_fact_ids=known_fact_ids
+                ),
+                severity=ChallengeSeverity(str(item.get("severity", ""))),
+                confidence=ConfidenceLevel(str(item.get("confidence", ""))),
+            )
+            for item in raw_risks
+            if isinstance(item, Mapping)
+        )
+
+        raw_observations = payload.get("observations", [])
+        if not isinstance(raw_observations, list):
+            raise PreAnalysisOutputInvalid("observations must be a list")
+        observations = tuple(
+            IndependentObservation(
+                statement_vi=str(item.get("statement_vi", "")),
+                citations=_pre_analysis_citations_from(
+                    list(item.get("citations", [])), known_fact_ids=known_fact_ids
+                ),
+                confidence=ConfidenceLevel(str(item.get("confidence", ""))),
+            )
+            for item in raw_observations
+            if isinstance(item, Mapping)
+        )
+
+        return RiskPreAnalysis(independent_risks=risks, observations=observations)
+
+
+class RunPreAnalysisInference:
+    """Call the reasoning endpoint with the closed blind Pass A schema and validate."""
+
+    def __init__(
+        self,
+        gateway: InferenceGateway,
+        *,
+        prompt: PreAnalysisPrompt | None = None,
+        builder: BuildPreAnalysis | None = None,
+    ) -> None:
+        self._gateway = gateway
+        self._prompt = prompt or PreAnalysisPrompt()
+        self._builder = builder or BuildPreAnalysis()
+
+    @property
+    def prompt_version(self) -> str:
+        return self._prompt.version
+
+    async def infer(
+        self, *, view: PreAnalysisEvidenceView, correlation_id: str
+    ) -> RiskPreAnalysis:
+        fact_ids = tuple(str(fact.confirmed_fact_id) for fact in view.confirmed_facts)
+        schema = build_pre_analysis_response_schema(fact_ids=fact_ids)
+        result = await self._gateway.reason(
+            ReasonRequest(
+                correlation_id=correlation_id,
+                case_id=view.case_id,
+                content=build_blind_untrusted_context(view=view),
+                response_schema=schema,
+                system_context=self._prompt.text,
+            )
+        )
+        if not isinstance(result.payload, Mapping):
+            raise PreAnalysisOutputInvalid("blind pre-analysis output is not a JSON object")
+        return self._builder.build(payload=result.payload, view=view)
 
 
 def _target_schema(universe: TargetUniverse) -> Mapping[str, Any]:
@@ -376,8 +671,14 @@ def build_untrusted_context(
     legal: LegalComplianceAssessment,
     pre_analysis: DeterministicPreAnalysis,
     universe: TargetUniverse,
+    blind_pre_analysis: RiskPreAnalysis | None = None,
 ) -> str:
-    """Serialize the scoped evidence for the prompt's untrusted-data region."""
+    """Serialize the scoped evidence for the prompt's untrusted-data region.
+
+    Pass B receives BOTH the maker/legal artifacts and the checker's own blind
+    Pass A pre-analysis (``blind_pre_analysis``), so it can compare its earlier
+    independent view against what the makers concluded.
+    """
 
     payload: dict[str, Any] = {
         "caseId": str(view.case_id),
@@ -394,6 +695,11 @@ def build_untrusted_context(
         "underwritingTargetPaths": list(universe.underwriting_paths),
         "legalAssessment": legal.model_dump(mode="json"),
         "legalTargetPaths": list(universe.legal_paths),
+        "blindPreAnalysis": (
+            blind_pre_analysis.model_dump(mode="json")
+            if blind_pre_analysis is not None
+            else {"independent_risks": [], "observations": []}
+        ),
         "deterministicPreAnalysis": {
             "citationGroundingChallengeCount": len(pre_analysis.citation_grounding_challenges),
             "visibilityChallengeCount": len(pre_analysis.visibility_challenges),
@@ -529,6 +835,7 @@ class BuildAssessment:
         run: CheckerRunContext,
         model_id: str,
         endpoint_id: str,
+        blind_pre_analysis: RiskPreAnalysis | None = None,
     ) -> RiskReviewAssessment:
         try:
             return self._build(
@@ -545,6 +852,7 @@ class BuildAssessment:
                 run=run,
                 model_id=model_id,
                 endpoint_id=endpoint_id,
+                blind_pre_analysis=blind_pre_analysis,
             )
         except (ValidationError, ValueError, TypeError, KeyError) as exc:
             if isinstance(exc, CheckerOutputInvalid | SameExecutionGuardTriggered):
@@ -567,10 +875,29 @@ class BuildAssessment:
         run: CheckerRunContext,
         model_id: str,
         endpoint_id: str,
+        blind_pre_analysis: RiskPreAnalysis | None = None,
     ) -> RiskReviewAssessment:
         if run.execution_id in (underwriting_execution_id, legal_execution_id):
             raise SameExecutionGuardTriggered(
                 "checker execution id must differ from every reviewed maker execution id"
+            )
+
+        blind_fact_ids = (
+            blind_pre_analysis.cited_confirmed_fact_ids()
+            if blind_pre_analysis is not None
+            else frozenset()
+        )
+
+        def raised_blind(citations: tuple[EvidenceCitation, ...]) -> bool:
+            # A Pass B challenge "originated in the blind pass" when it shares a
+            # Confirmed Fact with a blind-pass independent risk/observation:
+            # the checker had independently flagged that evidence before seeing
+            # any maker conclusion.  Deterministic and verifiable; it never
+            # trusts the model to self-report its own provenance.
+            return any(
+                isinstance(citation, ConfirmedFactCitation)
+                and str(citation.confirmed_fact_id) in blind_fact_ids
+                for citation in citations
             )
 
         known_fact_ids = {str(fact.confirmed_fact_id) for fact in view.confirmed_facts}
@@ -594,19 +921,22 @@ class BuildAssessment:
         raw_challenges = payload.get("challenges", [])
         if not isinstance(raw_challenges, list):
             raise CheckerOutputInvalid("challenges must be a list")
-        llm_challenges = tuple(
-            Challenge(
+        def _build_llm_challenge(item: Mapping[str, Any]) -> Challenge:
+            citations = citations_from(list(item.get("citations", [])))
+            return Challenge(
                 id=self._id_factory(),
                 target=_target_from(dict(item.get("target", {})), universe),
                 challenge_type=ChallengeType(str(item.get("challenge_type", ""))),
                 statement_vi=str(item.get("statement_vi", "")),
-                citations=citations_from(list(item.get("citations", []))),
+                citations=citations,
                 severity=ChallengeSeverity(str(item.get("severity", ""))),
                 confidence=ConfidenceLevel(str(item.get("confidence", ""))),
                 raised_by=RaisedBy.LLM,
+                raised_blind=raised_blind(citations),
             )
-            for item in raw_challenges
-            if isinstance(item, Mapping)
+
+        llm_challenges = tuple(
+            _build_llm_challenge(item) for item in raw_challenges if isinstance(item, Mapping)
         )
         # Deterministic challenges are always present; the LLM may only ADD.
         challenges = pre_analysis.all_challenges + llm_challenges
@@ -723,6 +1053,17 @@ class RunCheckerInference:
     def prompt_version(self) -> str:
         return self._prompt.version
 
+    @property
+    def gateway(self) -> InferenceGateway:
+        """The reasoning endpoint this Pass B runner wraps.
+
+        Exposed so the processor can derive a Pass A blind runner over the very
+        same endpoint when one is not injected explicitly (worker composition
+        wires only the Pass B runner).
+        """
+
+        return self._gateway
+
     async def infer(
         self,
         *,
@@ -736,6 +1077,7 @@ class RunCheckerInference:
         policy_hits: Sequence[PolicyHitRecord],
         controlled_check_results: Sequence[ControlledCheckResultRecord],
         run: CheckerRunContext,
+        blind_pre_analysis: RiskPreAnalysis | None = None,
     ) -> RiskReviewAssessment:
         if run.execution_id in (underwriting_execution_id, legal_execution_id):
             raise SameExecutionGuardTriggered(
@@ -759,6 +1101,7 @@ class RunCheckerInference:
                     legal=legal,
                     pre_analysis=pre_analysis,
                     universe=universe,
+                    blind_pre_analysis=blind_pre_analysis,
                 ),
                 response_schema=schema,
                 system_context=self._prompt.text,
@@ -780,6 +1123,7 @@ class RunCheckerInference:
             run=run,
             model_id=result.model_id,
             endpoint_id=result.endpoint_id,
+            blind_pre_analysis=blind_pre_analysis,
         )
 
 
@@ -813,14 +1157,25 @@ async def persist_checker_output(
 
 __all__ = [
     "OPERATIONS_HANDOFF_STATE",
+    "PRE_ANALYSIS_PROMPT_VERSION",
+    "PRE_ANALYSIS_SCHEMA_VERSION",
     "RISK_REVIEW_PROMPT_VERSION",
     "RISK_REVIEW_SCHEMA_VERSION",
     "BuildAssessment",
+    "BuildPreAnalysis",
     "CheckerOutputInvalid",
     "CheckerPrompt",
     "CheckerRunContext",
+    "IndependentObservation",
+    "IndependentRisk",
+    "PreAnalysisOutputInvalid",
+    "PreAnalysisPrompt",
+    "RiskPreAnalysis",
     "RunCheckerInference",
+    "RunPreAnalysisInference",
     "SameExecutionGuardTriggered",
+    "build_blind_untrusted_context",
+    "build_pre_analysis_response_schema",
     "build_response_schema",
     "build_untrusted_context",
     "gap_records_from",

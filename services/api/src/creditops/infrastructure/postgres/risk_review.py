@@ -31,6 +31,9 @@ from creditops.application.ports.risk_review import (
     MakerOutputsView,
     OpenGapRecord,
     PersistedCheckerOutput,
+    PersistedPreAnalysis,
+    PreAnalysisEvidenceView,
+    PreAnalysisRecord,
     ProvisionalGapRecord,
 )
 from creditops.application.risk_review.checker import OPERATIONS_HANDOFF_STATE
@@ -80,6 +83,50 @@ class PostgresRiskReviewRepository:
                 for row in await cursor.fetchall()
             )
         return CheckerEvidenceView(
+            case_id=case_id,
+            case_version=case_version,
+            built_at=datetime.now(UTC),
+            confirmed_facts=facts,
+        )
+
+    # -- BLIND evidence view for Pass A --------------------------------------
+    # Identical SQL to load_evidence_view (Confirmed Facts only) MINUS any
+    # maker/legal join: the blind pass reads evidence, never a maker
+    # conclusion.  Returned as PreAnalysisEvidenceView, a type with no maker
+    # attribute, so Pass A structurally cannot carry maker output.
+
+    async def load_blind_evidence_view(
+        self, case_id: UUID
+    ) -> PreAnalysisEvidenceView | None:
+        async with self._connection_factory() as connection:
+            cursor = await connection.execute(
+                "select case_version from public.credit_cases where id = %s",
+                (case_id,),
+            )
+            case_row = await cursor.fetchone()
+            if case_row is None:
+                return None
+            case_version = int(case_row[0])
+
+            cursor = await connection.execute(
+                """
+                select id, field_key, value, document_version_id
+                from public.confirmed_facts
+                where case_id = %s and case_version = %s and stale_at is null
+                order by created_at
+                """,
+                (case_id, case_version),
+            )
+            facts = tuple(
+                EvidenceFact(
+                    confirmed_fact_id=cast(UUID, row[0]),
+                    field_key=str(row[1]),
+                    value=cast("str | int | float | bool", row[2]),
+                    document_version_id=cast(UUID, row[3]),
+                )
+                for row in await cursor.fetchall()
+            )
+        return PreAnalysisEvidenceView(
             case_id=case_id,
             case_version=case_version,
             built_at=datetime.now(UTC),
@@ -309,6 +356,78 @@ class PostgresRiskReviewRepository:
             handoff_id=handoff_id,
             challenge_ids=challenge_ids,
             handoff_state=OPERATIONS_HANDOFF_STATE,
+            created=False,
+        )
+
+    # -- blind Pass A pre-analysis store --------------------------------------
+    # Append-only, deduplicated per (case, version, task).  Never references a
+    # maker table: the blind pass cannot load maker output through this path.
+
+    async def find_pre_analysis(
+        self, *, case_id: UUID, case_version: int, task_id: UUID
+    ) -> PersistedPreAnalysis | None:
+        async with self._connection_factory() as connection:
+            cursor = await connection.execute(
+                """
+                select id, analysis from public.risk_pre_analyses
+                where case_id = %s and case_version = %s and task_id = %s
+                """,
+                (case_id, case_version, task_id),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return PersistedPreAnalysis(
+            pre_analysis_id=cast(UUID, row[0]),
+            analysis=cast("dict[str, object]", row[1]),
+            created=False,
+        )
+
+    async def persist_pre_analysis(
+        self, *, record: PreAnalysisRecord
+    ) -> PersistedPreAnalysis:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                cursor = await connection.execute(
+                    """
+                    insert into public.risk_pre_analyses (
+                      id, case_id, case_version, task_id, execution_id,
+                      prompt_version, schema_version, analysis
+                    ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict (case_id, case_version, task_id) do nothing
+                    returning id
+                    """,
+                    (
+                        record.id,
+                        record.case_id,
+                        record.case_version,
+                        record.task_id,
+                        record.execution_id,
+                        record.prompt_version,
+                        record.schema_version,
+                        Jsonb(dict(record.analysis)),
+                    ),
+                )
+                inserted = await cursor.fetchone()
+                if inserted is not None:
+                    return PersistedPreAnalysis(
+                        pre_analysis_id=record.id,
+                        analysis=record.analysis,
+                        created=True,
+                    )
+                cursor = await connection.execute(
+                    """
+                    select id, analysis from public.risk_pre_analyses
+                    where case_id = %s and case_version = %s and task_id = %s
+                    """,
+                    (record.case_id, record.case_version, record.task_id),
+                )
+                existing = await cursor.fetchone()
+        if existing is None:
+            raise RuntimeError("pre-analysis idempotency row disappeared")
+        return PersistedPreAnalysis(
+            pre_analysis_id=cast(UUID, existing[0]),
+            analysis=cast("dict[str, object]", existing[1]),
             created=False,
         )
 
