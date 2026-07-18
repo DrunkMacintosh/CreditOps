@@ -1,0 +1,37 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: 0.375rem;
+  background: var(--card, #ffffff);
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.75rem;
+  line-height: 1.15;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
+}
+
+.label {
+  color: var(--ink, #14261f);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.reference {
+  overflow: hidden;
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

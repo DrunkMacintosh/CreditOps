@@ -12,9 +12,11 @@ import styles from "./conflict-list.module.css";
 export function ConflictList({ conflicts }: { conflicts: ConflictDto[] }) {
   return (
     <section aria-labelledby="conflict-list-heading">
-      <h2 id="conflict-list-heading">Mâu thuẫn chứng cứ</h2>
+      <h2 className={styles.heading} id="conflict-list-heading">
+        Mâu thuẫn chứng cứ
+      </h2>
       {conflicts.length === 0 ? (
-        <p>Không phát hiện mâu thuẫn giữa các tài liệu.</p>
+        <p className={styles.empty}>Không phát hiện mâu thuẫn giữa các tài liệu.</p>
       ) : (
         <ul className={styles.list}>
           {conflicts.map((conflict) => (
@@ -35,6 +37,7 @@ export function ConflictList({ conflicts }: { conflicts: ConflictDto[] }) {
                     <span className={styles.badgeStale}>Đã lỗi thời</span>
                   ) : null}
                 </div>
+                <p className={styles.disagreeLabel}>Các nguồn ghi nhận khác nhau</p>
                 {/* Sources are not a semantic list: the conflict itself is
                     the single listitem/article the brief asks for, scoped by
                     `within()` in tests. A nested <ul> here would register
@@ -48,13 +51,16 @@ export function ConflictList({ conflicts }: { conflicts: ConflictDto[] }) {
                       <span className={styles.sourceValue}>
                         {formatConflictValue(source.value)}
                       </span>
-                      {source.source ? (
-                        <span className={styles.sourcePage}>
-                          Trang {source.source.page}
+                      <span className={styles.evidenceChip}>
+                        <span aria-hidden="true" className={styles.evidenceDot} />
+                        {source.source ? (
+                          <span className={styles.sourcePage}>
+                            Trang {source.source.page}
+                          </span>
+                        ) : null}
+                        <span className={styles.sourceRef}>
+                          {shortDocumentReference(source.documentVersionId)}
                         </span>
-                      ) : null}
-                      <span className={styles.sourceRef}>
-                        {shortDocumentReference(source.documentVersionId)}
                       </span>
                     </div>
                   ))}

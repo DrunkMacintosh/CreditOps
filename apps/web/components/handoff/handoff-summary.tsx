@@ -28,18 +28,31 @@ const STATE_LABELS_VI: Record<HandoffView["state"], string> = {
 export function HandoffSummary({ handoff }: { handoff: HandoffView }) {
   return (
     <section aria-labelledby="handoff-summary-heading" className={styles.summary}>
-      <h2 id="handoff-summary-heading">Gói bàn giao chuyên viên</h2>
-      <span className={styles.boundary}>Không phải quyết định tín dụng</span>
+      <header className={styles.header}>
+        <p className={styles.eyebrow}>Gói bàn giao</p>
+        <h2 className={styles.title} id="handoff-summary-heading">
+          Gói bàn giao chuyên viên
+        </h2>
+        <span className={styles.boundary}>Không phải quyết định tín dụng</span>
+      </header>
+
+      <span className={styles.gateChip}>
+        <span aria-hidden="true" className={styles.gateDot} />
+        {STATE_LABELS_VI[handoff.state]}
+      </span>
+
+      <p className={styles.recipientNote}>
+        Gói này chuẩn bị chứng cứ để chuyên viên thẩm định rà soát. Hệ thống không quyết định cấp
+        hay từ chối tín dụng.
+      </p>
+
       {handoff.stale ? (
         <div className={styles.staleWarning} role="alert">
           <span className={styles.staleBadge}>Đã lỗi thời</span>
-          <p>
-            Gói bàn giao đã lỗi thời do hồ sơ thay đổi. Cần tạo lại sau khi xử lý thay đổi.
-          </p>
+          <p>Gói bàn giao đã lỗi thời do hồ sơ thay đổi. Cần tạo lại sau khi xử lý thay đổi.</p>
         </div>
       ) : null}
-      <p>{STATE_LABELS_VI[handoff.state]}</p>
-      <p>Phiên bản hồ sơ: {handoff.caseVersion}</p>
+
       <dl className={styles.counts}>
         <div>
           <dt>Dữ kiện đã xác nhận</dt>
@@ -54,7 +67,17 @@ export function HandoffSummary({ handoff }: { handoff: HandoffView }) {
           <dd>{handoff.gapCount}</dd>
         </div>
       </dl>
-      {handoff.createdAt ? <p>Thời điểm tạo: {formatViDateTime(handoff.createdAt)}</p> : null}
+
+      <div className={styles.manifest}>
+        <span className={styles.reference}>
+          <span aria-hidden="true" className={styles.referenceDot} />
+          Mã gói: {handoff.id} · phiên bản {handoff.caseVersion}
+        </span>
+        <p className={styles.metaLine}>Phiên bản hồ sơ: {handoff.caseVersion}</p>
+        {handoff.createdAt ? (
+          <p className={styles.metaLine}>Thời điểm tạo: {formatViDateTime(handoff.createdAt)}</p>
+        ) : null}
+      </div>
     </section>
   );
 }

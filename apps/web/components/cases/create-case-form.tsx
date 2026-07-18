@@ -5,6 +5,8 @@ import React, { type FormEvent, useRef, useState } from "react";
 
 import { creditOpsApi, getVietnameseApiError } from "../../lib/api/client";
 import type { CreditCaseDto } from "../../lib/api/contracts";
+import { EvidenceChip, shortReference } from "./evidence-chip";
+import styles from "./create-case-form.module.css";
 
 interface CreateCaseFormProps {
   api?: Pick<typeof creditOpsApi, "createCase">;
@@ -66,8 +68,8 @@ export function CreateCaseForm({
 
   if (!canCreateCase) {
     return (
-      <div className="state-panel" role="alert">
-        <h2>Không thể tạo hồ sơ minh họa</h2>
+      <div className={styles.panel} role="alert">
+        <h2 className={styles.panelTitle}>Không thể tạo hồ sơ minh họa</h2>
         <p>Bạn không có quyền tạo hồ sơ minh họa.</p>
       </div>
     );
@@ -75,8 +77,13 @@ export function CreateCaseForm({
 
   if (createdCase) {
     return (
-      <div className="state-panel" role="status">
-        <h2>Đã tạo hồ sơ</h2>
+      <div className={`${styles.panel} ${styles.panelReceipt}`} role="status">
+        <EvidenceChip
+          label={`Hồ sơ · phiên bản ${createdCase.version}`}
+          reference={shortReference(createdCase.id)}
+          title={`Mã hồ sơ: ${createdCase.id}`}
+        />
+        <h2 className={styles.panelTitle}>Đã tạo hồ sơ</h2>
         <p>Thông tin tổng hợp dùng cho trình diễn đã được ghi nhận. Tài liệu chỉ được đăng ký sau khi kho lưu trữ xác minh.</p>
         <Link
           className="button button-primary"
@@ -89,15 +96,15 @@ export function CreateCaseForm({
   }
 
   return (
-    <form className="case-form" noValidate onSubmit={submit}>
+    <form className={styles.form} noValidate onSubmit={submit}>
       {validationSummary ? (
-        <p aria-live="assertive" className="form-alert" role="alert">
+        <p aria-live="assertive" className={styles.alert} role="alert">
           {validationSummary}
         </p>
       ) : null}
-      <div className="field-group">
+      <div className={styles.fieldGroup}>
         <label htmlFor="requested-amount">Số tiền đề nghị</label>
-        <div className="input-suffix">
+        <div className={styles.inputSuffix}>
           <input
             aria-describedby={errors.requestedAmount ? "requested-amount-error" : "requested-amount-help"}
             aria-invalid={Boolean(errors.requestedAmount)}
@@ -111,17 +118,17 @@ export function CreateCaseForm({
           />
           <span>VND</span>
         </div>
-        <p className="field-help" id="requested-amount-help">
+        <p className={styles.fieldHelp} id="requested-amount-help">
           Nhập số nguyên, không dùng dấu phân cách.
         </p>
         {errors.requestedAmount ? (
-          <p className="field-error" id="requested-amount-error">
+          <p className={styles.fieldError} id="requested-amount-error">
             {errors.requestedAmount}
           </p>
         ) : null}
       </div>
 
-      <div className="field-group">
+      <div className={styles.fieldGroup}>
         <label htmlFor="financing-purpose">Mục đích vay vốn</label>
         <textarea
           aria-describedby={errors.purpose ? "purpose-error" : "purpose-help"}
@@ -134,18 +141,18 @@ export function CreateCaseForm({
           rows={5}
           value={purpose}
         />
-        <p className="field-help" id="purpose-help">
+        <p className={styles.fieldHelp} id="purpose-help">
           Chỉ nhập dữ liệu tổng hợp dùng cho trình diễn; không dùng dữ liệu khách hàng thật.
         </p>
         {errors.purpose ? (
-          <p className="field-error" id="purpose-error">
+          <p className={styles.fieldError} id="purpose-error">
             {errors.purpose}
           </p>
         ) : null}
       </div>
 
-      {requestError ? <p className="form-alert" role="alert">{requestError}</p> : null}
-      <div className="form-actions">
+      {requestError ? <p className={styles.alert} role="alert">{requestError}</p> : null}
+      <div className={styles.actions}>
         <button className="button button-primary" disabled={submitting} type="submit">
           {submitting ? "Đang tạo hồ sơ…" : "Tạo hồ sơ"}
         </button>

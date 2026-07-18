@@ -21,7 +21,9 @@ export function FactLedger({ facts }: { facts: ConfirmedFactDto[] }) {
   if (facts.length === 0) {
     return (
       <section aria-labelledby="fact-ledger-heading" className={styles.section}>
-        <h2 id="fact-ledger-heading">Sổ cái dữ kiện đã xác nhận</h2>
+        <h2 className={styles.emptyHeading} id="fact-ledger-heading">
+          Sổ cái dữ kiện đã xác nhận
+        </h2>
         <p>Chưa có dữ kiện nào được xác nhận.</p>
       </section>
     );
@@ -29,40 +31,66 @@ export function FactLedger({ facts }: { facts: ConfirmedFactDto[] }) {
 
   return (
     <section aria-label="Sổ cái dữ kiện đã xác nhận" className={styles.section}>
-      <table className={styles.table}>
-        <caption>Sổ cái dữ kiện đã xác nhận</caption>
-        <thead>
-          <tr>
-            <th scope="col">Trường thông tin</th>
-            <th scope="col">Giá trị đã xác nhận</th>
-            <th scope="col">Giá trị trích xuất gốc</th>
-            <th scope="col">Nguồn</th>
-            <th scope="col">Thời điểm xác nhận</th>
-            <th scope="col">Trạng thái</th>
-          </tr>
-        </thead>
-        <tbody>
-          {facts.map((fact) => {
-            const corrected = fact.value !== fact.candidateValue;
-            return (
-              <tr className={fact.stale ? styles.rowStale : undefined} key={fact.id}>
-                <th scope="row">{fieldLabelVi(fact.fieldKey)}</th>
-                <td>{formatFactValue(fact.value)}</td>
-                <td>{corrected ? formatFactValue(fact.candidateValue) : null}</td>
-                <td>Trang {fact.source.page}</td>
-                <td>{formatConfirmedAt(fact.confirmedAt)}</td>
-                <td>
-                  {fact.stale ? (
-                    <span className={styles.badgeStale}>Đã lỗi thời</span>
-                  ) : null}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className={styles.tableScroll}>
+        <table className={styles.table}>
+          <caption>Sổ cái dữ kiện đã xác nhận</caption>
+          <thead>
+            <tr>
+              <th scope="col">Trường thông tin</th>
+              <th scope="col">Giá trị đã xác nhận</th>
+              <th scope="col">Giá trị trích xuất gốc</th>
+              <th scope="col">Nguồn</th>
+              <th scope="col">Thời điểm xác nhận</th>
+              <th scope="col">Trạng thái</th>
+            </tr>
+          </thead>
+          <tbody>
+            {facts.map((fact) => {
+              const corrected = fact.value !== fact.candidateValue;
+              return (
+                <tr className={fact.stale ? styles.rowStale : undefined} key={fact.id}>
+                  <th scope="row">{fieldLabelVi(fact.fieldKey)}</th>
+                  <td>
+                    <span className={styles.value}>{formatFactValue(fact.value)}</span>
+                  </td>
+                  <td>
+                    {corrected ? (
+                      <span className={styles.candidateValue}>
+                        {formatFactValue(fact.candidateValue)}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td>
+                    <span className={styles.evidenceChip}>
+                      <span aria-hidden="true" className={styles.evidenceDot} />
+                      <span className={styles.evidencePage}>Trang {fact.source.page}</span>
+                      <span className={styles.evidenceRef}>
+                        {shortDocumentReference(fact.documentVersionId)}
+                      </span>
+                    </span>
+                  </td>
+                  <td>
+                    <span className={styles.confirmedAt}>
+                      {formatConfirmedAt(fact.confirmedAt)}
+                    </span>
+                  </td>
+                  <td>
+                    {fact.stale ? (
+                      <span className={styles.badgeStale}>Đã lỗi thời</span>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
+}
+
+function shortDocumentReference(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }
 
 function formatFactValue(value: string | number | boolean): string {

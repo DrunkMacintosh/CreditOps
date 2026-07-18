@@ -1,0 +1,510 @@
+/* Orchestration control room (Quy trình). Evidence-desk aesthetic: white cards
+   on cream, 1px lines, mono references, quiet status chips. Consumes the shared
+   design tokens with standalone fallbacks. */
+
+/* --- Layout ---------------------------------------------------------------- */
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 60rem) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.card {
+  padding: 1.5rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+  animation: orch-reveal 160ms ease-out;
+}
+
+.cardHead {
+  margin-bottom: 1.25rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.cardTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.cardLead {
+  max-width: 42rem;
+  margin: 0.6rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* --- Control bar (advance action) ----------------------------------------- */
+
+.controlBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+}
+
+.controlBarInvite {
+  border-color: var(--focus, #e2a126);
+  background: var(--amber-soft, #fff7e8);
+}
+
+.controlCopy {
+  min-width: 16rem;
+  flex: 1 1 20rem;
+}
+
+.controlEyebrow {
+  margin: 0 0 0.35rem;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.controlHint {
+  margin: 0;
+  max-width: 44rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+/* --- Async status surfaces ------------------------------------------------- */
+
+.liveRegion {
+  min-height: 1.25rem;
+  margin: 0 0 1.25rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.liveRegion:empty {
+  margin: 0;
+  min-height: 0;
+}
+
+.inlineAlert {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+  padding: 1rem 1.125rem;
+  border: 1px solid var(--risk, #8f2f23);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--risk-soft, #faeeea);
+}
+
+.inlineAlert p {
+  margin: 0;
+  flex: 1 1 18rem;
+  color: var(--risk, #8f2f23);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.refreshNote {
+  margin: -0.5rem 0 1.25rem;
+  color: var(--amber, #ba7d19);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* --- Deadlock / parked panel ---------------------------------------------- */
+
+.deadlock {
+  margin-bottom: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-left: 0.25rem solid var(--amber, #ba7d19);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--amber-soft, #fff7e8);
+}
+
+.deadlockEyebrow {
+  margin: 0 0 0.35rem;
+  color: var(--amber, #ba7d19);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.deadlockTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.deadlockLead {
+  max-width: 44rem;
+  margin: 0.5rem 0 0.75rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.deadlockReasons {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+/* --- Stage rail ------------------------------------------------------------ */
+
+.rail {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stageItem {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.1rem minmax(0, 1fr);
+  gap: 0.9rem;
+  padding-bottom: 1.5rem;
+}
+
+.stageItem:last-child {
+  padding-bottom: 0;
+}
+
+/* The connecting spine of the graph. */
+.stageItem::before {
+  content: "";
+  position: absolute;
+  left: calc(0.55rem - 1px);
+  top: 1.25rem;
+  bottom: 0;
+  width: 2px;
+  background: var(--line, #c9d0cb);
+}
+
+.stageItem:last-child::before {
+  display: none;
+}
+
+.stageMarker {
+  position: relative;
+  z-index: 1;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-top: 0.15rem;
+  border-radius: 50%;
+  border: 2px solid var(--card, #ffffff);
+  box-shadow: 0 0 0 1px var(--line, #c9d0cb);
+}
+
+.markerOk {
+  background: var(--ok, #2e6b4e);
+}
+.markerAmber {
+  background: var(--amber, #ba7d19);
+}
+.markerInfo {
+  background: var(--info, #31566b);
+}
+.markerRisk {
+  background: var(--risk, #8f2f23);
+}
+.markerMuted {
+  background: var(--line, #c9d0cb);
+}
+
+.stageBody {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.stageHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.stageIndex {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stageName {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.stageWhy {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.reasonText {
+  margin: 0;
+  flex: 1 1 14rem;
+  min-width: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.stageMeta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-top: 0.15rem;
+}
+
+.stageMetaLabel {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stageMetaValue {
+  color: var(--ink, #14261f);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.taskAttempts {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Planner queue --------------------------------------------------------- */
+
+.planSource {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.planSourceText {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.queue {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.queueCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+}
+
+.queueOrder {
+  width: 1.6rem;
+  height: 1.6rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ok-soft, #e9f3ed);
+  color: var(--leaf, #35614f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.queueBody {
+  min-width: 0;
+}
+
+.queueTask {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+
+.queueRationale {
+  margin: 0.2rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.queuePriority {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.queueEmpty {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* --- Status chips ---------------------------------------------------------- */
+
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.toneOk {
+  background: var(--ok-soft, #e9f3ed);
+  color: var(--ok, #2e6b4e);
+}
+.toneAmber {
+  background: var(--amber-soft, #fff7e8);
+  color: var(--amber, #ba7d19);
+}
+.toneInfo {
+  background: var(--info-soft, #eaf1f5);
+  color: var(--info, #31566b);
+}
+.toneRisk {
+  background: var(--risk-soft, #faeeea);
+  color: var(--risk, #8f2f23);
+}
+.toneMuted {
+  background: rgba(16, 44, 34, 0.05);
+  color: var(--ink-muted, #4f5f58);
+}
+
+.pulseDot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+  animation: orch-pulse 1.5s ease-in-out infinite;
+}
+
+/* --- Evidence ("chứng cứ") chip: the signature provenance element ---------- */
+
+.evidenceChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: 0.375rem;
+  background: var(--card, #ffffff);
+}
+
+.evidenceDot {
+  flex: 0 0 auto;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
+}
+
+.evidenceRef {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidenceDetail {
+  flex: 0 0 auto;
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- Motion ---------------------------------------------------------------- */
+
+@keyframes orch-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes orch-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .pulseDot {
+    animation: none;
+  }
+}

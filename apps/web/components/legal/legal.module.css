@@ -1,0 +1,512 @@
+/* Evidence-desk surface for the "Pháp chế" screen. Quiet, dense, disciplined:
+   white cards on cream, 1px lines, the "chứng cứ" chip as the one memorable
+   element. All colors read from the shared design tokens with standalone
+   fallbacks so the screen renders correctly before tokens are installed. */
+
+.page {
+  display: grid;
+  gap: 2rem;
+  color: var(--ink, #14261f);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page {
+    animation: legal-reveal 160ms ease-out both;
+  }
+}
+
+@keyframes legal-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* --- header --------------------------------------------------------------- */
+
+.header {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 52rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  margin: 0;
+  max-width: 46rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted, #4f5f58);
+}
+
+.provenance b {
+  font-weight: 600;
+  color: var(--ink, #14261f);
+}
+
+.corpusNotice {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-left: 0.25rem solid var(--amber, #ba7d19);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--amber-soft, #fff7e8);
+  color: #503b18;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.corpusNotice strong {
+  color: #3f3312;
+}
+
+.corpusNotice .noticeRef {
+  display: block;
+  margin-top: 0.3rem;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  color: #6b5a2e;
+}
+
+/* --- sections ------------------------------------------------------------- */
+
+.section {
+  display: grid;
+  gap: 1rem;
+}
+
+.sectionHead {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.sectionTitleRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.sectionCount {
+  flex: 0 0 auto;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted, #4f5f58);
+}
+
+.sectionCopy {
+  margin: 0;
+  max-width: 48rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.stack {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* --- cards ---------------------------------------------------------------- */
+
+.card {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1.35rem 1.4rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+}
+
+.cardRisk {
+  border-left: 0.25rem solid var(--risk, #8f2f23);
+  background: var(--risk-soft, #faeeea);
+}
+
+.cardAmber {
+  border-left: 0.25rem solid var(--amber, #ba7d19);
+  background: var(--amber-soft, #fff7e8);
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+}
+
+.cardTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.cardSubtitle {
+  margin: 0.15rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.body {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* --- gate chips ----------------------------------------------------------- */
+
+.gate {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.gate::before {
+  content: "";
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.gateOk {
+  background: var(--ok-soft, #e9f3ed);
+  color: var(--ok, #2e6b4e);
+}
+
+.gateRisk {
+  background: var(--risk-soft, #faeeea);
+  color: var(--risk, #8f2f23);
+}
+
+.gateAmber {
+  background: var(--amber-soft, #fff7e8);
+  color: var(--amber, #ba7d19);
+}
+
+.gateInfo {
+  background: var(--info-soft, #eaf1f5);
+  color: var(--info, #31566b);
+}
+
+.gateMuted {
+  background: #edf0ee;
+  color: var(--ink-muted, #4f5f58);
+}
+
+/* --- evidence "chứng cứ" chip — the signature element --------------------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
+.chipDot {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
+}
+
+.chipKind {
+  color: var(--ink-muted, #4f5f58);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.chipRef {
+  overflow: hidden;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink, #14261f);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipQuote {
+  max-width: 34rem;
+  color: var(--ink-muted, #4f5f58);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- findings ------------------------------------------------------------- */
+
+.findingList {
+  display: grid;
+  gap: 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.finding {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.finding + .finding {
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line, #c9d0cb);
+}
+
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+}
+
+.confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--ink-muted, #4f5f58);
+}
+
+.confidence::before {
+  content: "";
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.confHigh {
+  color: var(--ok, #2e6b4e);
+}
+
+.confMedium {
+  color: var(--amber, #ba7d19);
+}
+
+.confLow {
+  color: var(--risk, #8f2f23);
+}
+
+.uncertainty {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.uncertainty b {
+  font-weight: 600;
+  color: var(--ink, #14261f);
+}
+
+/* --- controlled-check + collateral detail --------------------------------- */
+
+.detailRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--ink-muted, #4f5f58);
+}
+
+.detailRow b {
+  font-weight: 600;
+  color: var(--ink, #14261f);
+}
+
+.mono {
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.provenanceLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--line, #c9d0cb);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted, #4f5f58);
+}
+
+.mockTag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.375rem;
+  background: #edf0ee;
+  color: var(--ink-muted, #4f5f58);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.interpret {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--canvas, #f4f5f3);
+}
+
+.interpretLabel {
+  margin: 0;
+  color: var(--leaf, #35614f);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* --- suggested evidence / gap lists --------------------------------------- */
+
+.suggest {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.categoryTag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.375rem;
+  background: var(--info-soft, #eaf1f5);
+  color: var(--info, #31566b);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* --- empty state ---------------------------------------------------------- */
+
+.empty {
+  padding: 1.1rem 1.2rem;
+  border: 1px dashed var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.emptyPage {
+  display: grid;
+  gap: 0.6rem;
+  padding: 2rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+}
+
+.emptyPage h2 {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.emptyPage p {
+  margin: 0;
+  max-width: 42rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.emptyPage a {
+  color: var(--leaf, #35614f);
+  font-weight: 650;
+}
+
+@media (max-width: 560px) {
+  .cardHead {
+    flex-direction: column;
+  }
+
+  .sectionTitleRow {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+}

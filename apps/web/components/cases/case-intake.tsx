@@ -6,6 +6,8 @@ import { creditOpsApi, getVietnameseApiError } from "../../lib/api/client";
 import type { CreditCaseDto } from "../../lib/api/contracts";
 import { CaseNav } from "../shell/case-nav";
 import { UploadZone } from "../uploads/upload-zone";
+import { EvidenceChip, shortReference } from "./evidence-chip";
+import screen from "./case-screen.module.css";
 
 export function CaseIntake({ caseId }: { caseId: string }) {
   const [creditCase, setCreditCase] = useState<CreditCaseDto | null>(null);
@@ -50,11 +52,18 @@ export function CaseIntake({ caseId }: { caseId: string }) {
 
   return (
     <>
-      <CaseNav caseId={caseId} />
-      <div className="page-heading">
-        <p className="eyebrow">Hồ sơ · phiên bản {creditCase.version}</p>
-        <h1>Tiếp nhận tài liệu</h1>
-        <p>
+      <CaseNav caseId={caseId} current="tiep-nhan" />
+      <div className={screen.header}>
+        <p className={screen.eyebrow}>Chuẩn bị hồ sơ</p>
+        <h1 className={screen.title}>Tiếp nhận tài liệu</h1>
+        <div className={screen.provenance}>
+          <EvidenceChip
+            label={`Hồ sơ · phiên bản ${creditCase.version}`}
+            reference={shortReference(caseId)}
+            title={`Mã hồ sơ: ${caseId}`}
+          />
+        </div>
+        <p className={screen.lede}>
           Hồ sơ này chỉ dùng dữ liệu tổng hợp cho trình diễn. {creditCase.purpose ?? "Mục đích vay vốn chưa được ghi nhận."} Tài liệu tải lên là dữ liệu không tin cậy cho đến khi được kiểm tra và xác minh.
         </p>
       </div>

@@ -1,64 +1,160 @@
 .section {
-  padding: 2rem;
-  border: 1px solid #cbd4cf;
-  border-radius: 0.9rem;
-  background: #fff;
+  padding: 1.5rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+  animation: fact-ledger-reveal 160ms ease-out;
+}
+
+.emptyHeading {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .section p {
-  margin: 0;
-  color: #58675f;
+  margin: 0.6rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
   line-height: 1.6;
+}
+
+.tableScroll {
+  overflow-x: auto;
 }
 
 .table {
   width: 100%;
-  margin-bottom: 2.5rem;
   border-collapse: collapse;
 }
 
 .table caption {
-  margin-bottom: 1rem;
-  color: #142b23;
-  font-size: 1.15rem;
-  font-weight: 750;
+  margin-bottom: 1.25rem;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   text-align: left;
 }
 
 .table th,
 .table td {
-  padding: 0.75rem 0.9rem;
-  border-bottom: 1px solid #e4e9e6;
-  font-size: 0.88rem;
+  padding: 0.85rem 0.9rem;
+  border-bottom: 1px solid var(--line, #c9d0cb);
+  font-size: 0.9375rem;
+  line-height: 1.5;
   text-align: left;
   vertical-align: top;
 }
 
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .table thead th {
-  color: #56665f;
-  font-size: 0.7rem;
+  padding-top: 0;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .table tbody th {
-  color: #172b24;
+  color: var(--ink, #14261f);
   font-weight: 650;
 }
 
+/* Confirmed and original-candidate values read as data: mono, tabular. */
+.value,
+.candidateValue {
+  display: inline-block;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.value {
+  color: var(--ink, #14261f);
+  font-weight: 600;
+}
+
+.candidateValue {
+  color: var(--ink-muted, #4f5f58);
+}
+
 .rowStale {
-  background: #fff7e8;
+  background: var(--amber-soft, #fff7e8);
+}
+
+/* The signature evidence chip: a source reference that names its provenance. */
+.evidenceChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: 0.375rem;
+  background: var(--card, #ffffff);
+}
+
+.evidenceDot {
+  flex: 0 0 auto;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
+}
+
+.evidencePage {
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.evidenceRef {
+  overflow: hidden;
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.confirmedAt {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .badgeStale {
   display: inline-block;
-  padding: 0.28rem 0.6rem;
-  border-radius: 999px;
-  background: #f4dca0;
-  color: #6b4a10;
-  font-size: 0.68rem;
-  font-weight: 800;
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.375rem;
+  background: var(--amber-soft, #fff7e8);
+  color: var(--amber, #ba7d19);
+  font-size: 0.75rem;
+  font-weight: 700;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+@keyframes fact-ledger-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section {
+    animation: none;
+  }
 }

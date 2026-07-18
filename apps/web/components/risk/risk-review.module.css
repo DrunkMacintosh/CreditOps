@@ -1,0 +1,630 @@
+/* Evidence-desk surface for the Independent Risk Review ("Rủi ro") screen.
+   Quiet, dense, disciplined: white cards on cream, 1px lines, mono refs. The
+   one signature element is the "chứng cứ" chip (.chip) — every challenge shows
+   the maker passage and evidence it disputes. */
+
+.page {
+  display: block;
+}
+
+/* --- Header --- */
+
+.header {
+  max-width: 52rem;
+  margin-bottom: 1.75rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.pageTitle {
+  max-width: none;
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.lede {
+  max-width: 46rem;
+  margin: 0.85rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.authorityNote {
+  margin: 0.85rem 0 0;
+  padding: 0.65rem 0.9rem;
+  border-left: 0.2rem solid var(--amber, #ba7d19);
+  border-radius: 0 var(--radius, 0.75rem) var(--radius, 0.75rem) 0;
+  background: var(--amber-soft, #fff7e8);
+  color: #503b18;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+/* --- Generic card --- */
+
+.card {
+  padding: 1.4rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+}
+
+.card + .card {
+  margin-top: 1rem;
+}
+
+/* --- Provenance strip (the whole review shows its lineage) --- */
+
+.provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem 2.25rem;
+  align-items: flex-start;
+  margin-bottom: 1.25rem;
+  padding: 1.1rem 1.4rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+}
+
+.provItem {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.provLabel {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.provValue {
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.provValuePlain {
+  font-family: inherit;
+}
+
+/* --- Gate summary --- */
+
+.gate {
+  margin-bottom: 1.75rem;
+}
+
+.gateHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.gateTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.gateExplain {
+  margin: 0.6rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.gateMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.75rem;
+  margin-top: 1.15rem;
+  padding-top: 1.15rem;
+  border-top: 1px solid var(--line, #c9d0cb);
+}
+
+.metric {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.metricNum {
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 1.375rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.metricLabel {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+}
+
+/* --- Section header --- */
+
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.countPill {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: var(--canvas, #f4f5f3);
+  border: 1px solid var(--line, #c9d0cb);
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.challengeList {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* --- Challenge card --- */
+
+.challenge {
+  padding: 1.4rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-left-width: 0.28rem;
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+}
+
+.challenge[data-severity="CRITICAL"],
+.challenge[data-severity="HIGH"] {
+  border-left-color: var(--risk, #8f2f23);
+}
+
+.challenge[data-severity="MEDIUM"] {
+  border-left-color: var(--amber, #ba7d19);
+}
+
+.challenge[data-severity="LOW"] {
+  border-left-color: var(--info, #31566b);
+}
+
+.challengeTop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.challengeType {
+  margin-right: auto;
+  color: var(--ink, #14261f);
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.confidence {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+}
+
+.statement {
+  margin: 0.9rem 0 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  line-height: 1.65;
+}
+
+/* --- Chips (status + evidence) --- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.chipRisk {
+  background: var(--risk-soft, #faeeea);
+  color: var(--risk, #8f2f23);
+}
+
+.chipAmber {
+  background: var(--amber-soft, #fff7e8);
+  color: var(--amber, #ba7d19);
+}
+
+.chipInfo {
+  background: var(--info-soft, #eaf1f5);
+  color: var(--info, #31566b);
+}
+
+.chipOk {
+  background: var(--ok-soft, #e9f3ed);
+  color: var(--ok, #2e6b4e);
+}
+
+.chipMuted {
+  background: var(--canvas, #f4f5f3);
+  border: 1px solid var(--line, #c9d0cb);
+  color: var(--ink-muted, #4f5f58);
+  font-weight: 650;
+}
+
+.critMark {
+  font-size: 0.7rem;
+}
+
+/* Evidence ("chứng cứ") chip — the product's signature element */
+
+.evidenceBlock {
+  margin-top: 1.1rem;
+}
+
+.evidenceLabel {
+  margin: 0 0 0.5rem;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.evidenceChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  max-width: 100%;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: 0.375rem;
+  background: var(--card, #ffffff);
+}
+
+.evidenceChipTarget {
+  background: var(--canvas, #f4f5f3);
+}
+
+.chipDot {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
+}
+
+.chipText {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.chipKind {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.75rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.chipRef {
+  overflow: hidden;
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Recorded dispositions --- */
+
+.dispositions {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1.2rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line, #c9d0cb);
+}
+
+.dispositionsHeading {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dispoItem {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--ok-soft, #e9f3ed);
+}
+
+.dispoHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.dispoType {
+  color: var(--deep, #102c22);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.dispoMeta {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dispoNote {
+  margin: 0.5rem 0 0;
+  color: var(--ink, #14261f);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* --- Disposition form --- */
+
+.form {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1.2rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line, #c9d0cb);
+}
+
+.formHeading {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+
+.formHint {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.fieldsetLegend {
+  margin-bottom: 0.5rem;
+  padding: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.radioGroup {
+  display: grid;
+  gap: 0.5rem;
+}
+
+@media (min-width: 34rem) {
+  .radioGroup {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.radioOption {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  color: var(--ink, #14261f);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.radioOption[data-checked="true"] {
+  border-color: var(--leaf, #35614f);
+  background: var(--ok-soft, #e9f3ed);
+  font-weight: 650;
+}
+
+.radioOption input {
+  accent-color: var(--leaf, #35614f);
+}
+
+.fixedType {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.875rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.fieldLabel {
+  color: var(--ink, #14261f);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.required {
+  color: var(--risk, #8f2f23);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.textarea[aria-invalid="true"] {
+  border-color: var(--risk, #8f2f23);
+}
+
+.charCount {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.fieldError {
+  margin: 0;
+  color: var(--risk, #8f2f23);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.submit {
+  min-height: 2.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1.1rem;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  background: var(--deep, #102c22);
+  color: #f6f9f6;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.submit:hover:not(:disabled) {
+  background: var(--leaf, #35614f);
+}
+
+.submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.pendingNote {
+  color: var(--info, #31566b);
+  font-size: 0.8125rem;
+}
+
+/* --- Empty / info states --- */
+
+.empty {
+  display: grid;
+  gap: 0.75rem;
+  padding: 2rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+}
+
+.emptyTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+}
+
+.emptyBody {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.noneRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px dashed var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.875rem;
+}
+
+/* --- Reveal on load (single, gentle) --- */
+
+.reveal {
+  animation: risk-reveal 160ms ease-out;
+}
+
+@keyframes risk-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+  }
+}

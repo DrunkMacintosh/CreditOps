@@ -32,24 +32,44 @@ export function AuditTimeline({
   loadingMore?: boolean;
 }) {
   return (
-    <section aria-labelledby="audit-timeline-heading">
-      <h2 id="audit-timeline-heading">Nhật ký hồ sơ</h2>
+    <section aria-labelledby="audit-timeline-heading" className={styles.section}>
+      <header className={styles.header}>
+        <p className={styles.eyebrow}>Nhật ký</p>
+        <h2 className={styles.title} id="audit-timeline-heading">
+          Nhật ký hồ sơ
+        </h2>
+      </header>
       {events.length === 0 ? (
-        <p>Chưa có sự kiện nào được ghi nhận.</p>
+        <p className={styles.empty}>Chưa có sự kiện nào được ghi nhận.</p>
       ) : (
         <ol aria-label="Nhật ký hồ sơ" className={styles.timeline}>
           {events.map((event) => (
             <li className={styles.event} key={event.id}>
-              <time dateTime={event.createdAt}>{formatViDateTime(event.createdAt)}</time>
-              <code className={styles.eventType}>{event.eventType}</code>
-              <p>
-                Tác nhân: {event.actorType}
-                {event.actorId ? ` · ${shortId(event.actorId)}` : ""}
-              </p>
-              <p>
-                Đối tượng: {event.artifactType} · {shortId(event.artifactId)}
-              </p>
-              <p>Phiên bản hồ sơ: {event.caseVersion}</p>
+              <span aria-hidden="true" className={`${styles.dot} ${eventDotClass(event.eventType)}`} />
+              <div className={styles.entry}>
+                <div className={styles.entryHead}>
+                  <code className={styles.eventType}>{event.eventType}</code>
+                  <time className={styles.time} dateTime={event.createdAt}>
+                    {formatViDateTime(event.createdAt)}
+                  </time>
+                </div>
+                <p className={styles.meta}>
+                  <span className={styles.metaLabel}>Tác nhân:</span>{" "}
+                  {event.actorType}
+                  {event.actorId ? (
+                    <>
+                      {" · "}
+                      <span className={styles.ref}>{shortId(event.actorId)}</span>
+                    </>
+                  ) : null}
+                </p>
+                <p className={styles.meta}>
+                  <span className={styles.metaLabel}>Đối tượng:</span> {event.artifactType}
+                  {" · "}
+                  <span className={styles.ref}>{shortId(event.artifactId)}</span>
+                </p>
+                <p className={styles.metaVersion}>Phiên bản hồ sơ: {event.caseVersion}</p>
+              </div>
             </li>
           ))}
         </ol>
@@ -57,7 +77,7 @@ export function AuditTimeline({
       {nextCursor && onLoadMore ? (
         <button
           aria-busy={loadingMore}
-          className="button button-secondary"
+          className={`${styles.loadMore} button button-secondary`}
           disabled={loadingMore}
           onClick={() => onLoadMore(nextCursor)}
           type="button"
@@ -71,6 +91,21 @@ export function AuditTimeline({
 
 function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+}
+
+// The dot colour is the only signal an entry type carries — derived from the
+// event verb and mapped to the shared gate/status token colours (never a loud
+// background). Unknown types fall back to the calm leaf-green default.
+function eventDotClass(eventType: string): string {
+  const type = eventType.toUpperCase();
+  const has = (...keys: string[]) => keys.some((key) => type.includes(key));
+  if (has("FAIL", "BLOCK", "REJECT", "ERROR")) return styles.dotRisk;
+  if (has("CONFIRM", "PASS", "SUCCEED", "SUCCESS", "COMPLETE")) return styles.dotOk;
+  if (has("SUPERSED", "STALE", "CANCEL", "SKIP", "REVOK", "EXPIRE")) return styles.dotMuted;
+  if (has("CREATE", "REGISTER", "UPLOAD", "SUBMIT", "START", "RECEIV", "OPEN", "RUN")) {
+    return styles.dotInfo;
+  }
+  return styles.dotLeaf;
 }
 
 function formatViDateTime(iso: string): string {

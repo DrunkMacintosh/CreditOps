@@ -1,3 +1,18 @@
+.heading {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.empty {
+  margin: 0.6rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
 .list {
   display: grid;
   gap: 1rem;
@@ -6,16 +21,22 @@
   list-style: none;
 }
 
+/* A conflict is a risk-flavoured item: risk-soft band + a strong risk edge so
+   disagreement reads at a glance. It never resolves itself. */
 .conflict {
   padding: 1.25rem 1.4rem;
-  border: 1px solid #cbd4cf;
-  border-radius: 0.9rem;
-  background: #fff;
+  border: 1px solid var(--line, #c9d0cb);
+  border-left: 0.25rem solid var(--risk, #8f2f23);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--risk-soft, #faeeea);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+  animation: conflict-reveal 160ms ease-out;
 }
 
+/* Stale (superseded) conflicts step back to the amber "no longer active" band. */
 .conflictStale {
-  border-color: #d9c69c;
-  background: #fffbf2;
+  border-left-color: var(--amber, #ba7d19);
+  background: var(--amber-soft, #fff7e8);
 }
 
 .conflictHeader {
@@ -27,14 +48,29 @@
 
 .conflictHeader h3 {
   margin: 0;
-  color: #172b24;
-  font-size: 1.05rem;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.disagreeLabel {
+  margin: 0.85rem 0 0;
+  color: var(--risk, #8f2f23);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.conflictStale .disagreeLabel {
+  color: var(--amber, #ba7d19);
 }
 
 .sources {
   display: grid;
   gap: 0.6rem;
-  margin: 1rem 0;
+  margin: 0.5rem 0 0;
   padding: 0;
   list-style: none;
 }
@@ -42,46 +78,88 @@
 .source {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid #e4e9e6;
-  border-radius: 0.6rem;
-  font-size: 0.86rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
 }
 
 .sourceValue {
-  color: #172b24;
-  font-weight: 650;
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Shared evidence-chip provenance, consistent with the fact ledger. */
+.evidenceChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: 0.375rem;
+  background: var(--card, #ffffff);
+}
+
+.evidenceDot {
+  flex: 0 0 auto;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
 }
 
 .sourcePage {
-  color: #56665f;
-  font-size: 0.78rem;
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .sourceRef {
-  margin-left: auto;
-  color: #78837e;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.74rem;
+  overflow: hidden;
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .badgeStale {
   display: inline-block;
-  padding: 0.28rem 0.6rem;
-  border-radius: 999px;
-  background: #f4dca0;
-  color: #6b4a10;
-  font-size: 0.68rem;
-  font-weight: 800;
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.375rem;
+  background: var(--card, #ffffff);
+  color: var(--amber, #ba7d19);
+  font-size: 0.75rem;
+  font-weight: 700;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .note {
-  margin: 0.85rem 0 0;
-  color: #56665f;
-  font-size: 0.82rem;
+  margin: 0.9rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
   line-height: 1.55;
+}
+
+@keyframes conflict-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conflict {
+    animation: none;
+  }
 }

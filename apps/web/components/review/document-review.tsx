@@ -101,10 +101,11 @@ export function DocumentReview({
 
   const regions = useMemo(
     () =>
-      candidates.map((candidate) => ({
+      candidates.map((candidate, position) => ({
         candidateId: candidate.id,
         fieldKey: candidate.fieldKey,
         source: candidate.source,
+        index: position + 1,
       })),
     [candidates],
   );
@@ -119,9 +120,11 @@ export function DocumentReview({
     [],
   );
 
+  const resolvedCount = candidates.filter((candidate) =>
+    isResolved(drafts[candidate.id]),
+  ).length;
   const allResolved =
-    candidates.length > 0 &&
-    candidates.every((candidate) => isResolved(drafts[candidate.id]));
+    candidates.length > 0 && resolvedCount === candidates.length;
   const confirmDisabled = !canConfirm || !allResolved || submitting;
   const stageLabel = STAGE_LABELS_VI[review.stage];
 
@@ -165,13 +168,16 @@ export function DocumentReview({
   return (
     <section aria-labelledby="document-review-heading" className={styles.review}>
       <div className={styles.reviewHeader}>
+        <p className={styles.eyebrow}>Rà soát chứng cứ</p>
         <h2 id="document-review-heading">Chứng cứ đề xuất từ tài liệu</h2>
-        <p className={styles.stage}>Giai đoạn tài liệu: {stageLabel}</p>
-        {review.fileName ? (
-          <p className={styles.fileName}>Tài liệu: {review.fileName}</p>
-        ) : null}
+        <div className={styles.metaRow}>
+          <p className={styles.stage}>Giai đoạn: {stageLabel}</p>
+          {review.fileName ? (
+            <p className={styles.fileName}>{review.fileName}</p>
+          ) : null}
+        </div>
         <p className={styles.boundaryNote}>
-          Mỗi giá trị dưới đây là dữ liệu trích xuất cần cán bộ xử lý trước khi
+          Mỗi giá trị dưới đây là dữ liệu trích xuất cần cán bộ rà soát trước khi
           xác nhận. Đây không phải quyết định tín dụng.
         </p>
       </div>
@@ -184,14 +190,17 @@ export function DocumentReview({
               <p>Giai đoạn tài liệu: {stageLabel}</p>
             </div>
           ) : (
-            candidates.map((candidate) => (
+            candidates.map((candidate, position) => (
               <CandidateDispositionForm
                 candidate={candidate}
                 disabled={!canConfirm}
+                documentLabel={review.fileName}
+                documentVersion={review.documentVersion}
                 draft={drafts[candidate.id] ?? emptyDraft()}
                 fieldsetRef={(element) => {
                   fieldsetRefs.current[candidate.id] = element;
                 }}
+                index={position + 1}
                 key={candidate.id}
                 onChange={(patch) => updateDraft(candidate.id, patch)}
                 onSelect={() => setSelectedCandidateId(candidate.id)}
@@ -228,15 +237,26 @@ export function DocumentReview({
             </div>
           ) : null}
 
-          <button
-            aria-busy={submitting}
-            className="button button-primary"
-            disabled={confirmDisabled}
-            onClick={() => void handleConfirm()}
-            type="button"
-          >
-            Xác nhận tài liệu
-          </button>
+          <div className={styles.confirmBar}>
+            {candidates.length > 0 ? (
+              <p aria-live="polite" className={styles.progressNote}>
+                Đã xử lý{" "}
+                <strong>
+                  {resolvedCount}/{candidates.length}
+                </strong>{" "}
+                chứng cứ.
+              </p>
+            ) : null}
+            <button
+              aria-busy={submitting}
+              className="button button-primary"
+              disabled={confirmDisabled}
+              onClick={() => void handleConfirm()}
+              type="button"
+            >
+              Xác nhận tài liệu
+            </button>
+          </div>
         </div>
 
         <SourceViewer

@@ -1,10 +1,33 @@
 :root {
+  /* --- Design tokens (evidence-desk system) --- */
+  --canvas: #f4f5f3;
+  --card: #ffffff;
+  --ink: #14261f;
+  --ink-muted: #4f5f58;
+  --line: #c9d0cb;
+  --deep: #102c22;
+  --leaf: #35614f;
+  --amber: #ba7d19;
+  --amber-soft: #fff7e8;
+  --focus: #e2a126;
+  --ok: #2e6b4e;
+  --ok-soft: #e9f3ed;
+  --risk: #8f2f23;
+  --risk-soft: #faeeea;
+  --info: #31566b;
+  --info-soft: #eaf1f5;
+  --radius: 0.75rem;
+  --radius-lg: 1.25rem;
+  /* --font-mono-next is injected by next/font in layout.tsx; the literal name
+     and generic fallbacks keep the token resolving when the font is absent. */
+  --font-mono: var(--font-mono-next), "IBM Plex Mono", ui-monospace, monospace;
+
   color-scheme: light;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  background: #f4f5f3;
-  color: #14261f;
+  background: var(--canvas, #f4f5f3);
+  color: var(--ink, #14261f);
 }
 
 * {
@@ -25,14 +48,14 @@ main {
 .intake-panel {
   width: min(100%, 52rem);
   padding: clamp(2rem, 6vw, 4.5rem);
-  border: 1px solid #c9d0cb;
-  border-radius: 1.25rem;
-  background: #ffffff;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
 }
 
 .eyebrow {
   margin: 0 0 1rem;
-  color: #35614f;
+  color: var(--leaf, #35614f);
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -49,7 +72,7 @@ h1 {
 .boundary {
   max-width: 40rem;
   margin: 1.5rem 0 2.5rem;
-  color: #4f5f58;
+  color: var(--ink-muted, #4f5f58);
   font-size: 1.05rem;
   line-height: 1.7;
 }
@@ -58,8 +81,8 @@ h1 {
   display: grid;
   gap: 0.5rem;
   padding: 1rem 1.125rem;
-  border-left: 0.25rem solid #ba7d19;
-  background: #fff7e8;
+  border-left: 0.25rem solid var(--amber, #ba7d19);
+  background: var(--amber-soft, #fff7e8);
   color: #503b18;
   font-size: 0.9rem;
   line-height: 1.5;
@@ -76,7 +99,7 @@ textarea {
 }
 
 :where(a, button, input, textarea):focus-visible {
-  outline: 3px solid #e2a126;
+  outline: 3px solid var(--focus, #e2a126);
   outline-offset: 3px;
 }
 
@@ -93,7 +116,7 @@ textarea {
   left: 0.75rem;
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
-  background: #102c22;
+  background: var(--deep, #102c22);
   color: white;
   font-weight: 700;
   transform: translateY(-160%);
@@ -110,7 +133,7 @@ textarea {
   justify-content: space-between;
   gap: 2rem;
   padding: 0 5vw;
-  border-bottom: 1px solid #cbd4cf;
+  border-bottom: 1px solid var(--line, #c9d0cb);
   background: rgba(248, 250, 248, 0.94);
 }
 
@@ -118,7 +141,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 0.75rem;
-  color: #173d2f;
+  color: var(--deep, #102c22);
   text-decoration: none;
 }
 
@@ -128,7 +151,7 @@ textarea {
   display: grid;
   place-items: center;
   border-radius: 0.65rem;
-  background: #173d2f;
+  background: var(--deep, #102c22);
   color: #f8fbf9;
   font-size: 0.73rem;
   font-weight: 800;
@@ -146,7 +169,7 @@ textarea {
 
 .brand small {
   margin-top: 0.24rem;
-  color: #607169;
+  color: var(--ink-muted, #4f5f58);
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -165,14 +188,28 @@ textarea {
   text-decoration: none;
 }
 
+/* Authority boundary: quiet single-line reminder, never louder than content. */
 .authority-boundary {
-  padding: 0.7rem 5vw;
-  border-bottom: 1px solid #e4d5b6;
-  background: #fff6e3;
-  color: #5c451c;
-  font-size: 0.82rem;
-  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.55rem 5vw;
+  border-bottom: 1px solid var(--line, #c9d0cb);
+  background: var(--card, #ffffff);
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.78rem;
+  line-height: 1.45;
   text-align: center;
+}
+
+.authority-boundary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--amber, #ba7d19);
 }
 
 .app-main {
@@ -226,7 +263,7 @@ textarea {
 
 .page-heading h1 {
   max-width: 46rem;
-  color: #142b23;
+  color: var(--ink, #14261f);
   font-size: clamp(2.25rem, 5vw, 4.25rem);
 }
 
@@ -348,7 +385,6 @@ textarea {
   line-height: 1.35;
 }
 
-.status-chip,
 .private-badge {
   flex: 0 0 auto;
   padding: 0.38rem 0.55rem;
@@ -519,23 +555,92 @@ textarea {
   gap: 0.75rem;
 }
 
+/* --- Case navigation: grouped evidence-desk tabs --- */
 .case-nav {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
   margin-bottom: 2.4rem;
-  color: #5c6b64;
-  font-size: 0.78rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line, #c9d0cb);
 }
 
-.case-nav a {
-  color: #245943;
+.case-nav-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.case-nav-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--leaf, #35614f);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.case-nav-back:hover {
+  text-decoration: underline;
 }
 
 .case-reference {
-  margin-left: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #78837e;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+}
+
+.case-nav-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem 2.25rem;
+}
+
+.case-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.case-nav-group-label {
+  color: var(--leaf, #35614f);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.case-nav-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.case-nav-tab {
+  display: inline-block;
+  padding: 0.32rem 0.55rem 0.42rem;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.case-nav-tab:hover {
+  color: var(--ink, #14261f);
+  border-bottom-color: var(--line, #c9d0cb);
+}
+
+.case-nav-tab.is-current {
+  color: var(--deep, #102c22);
+  font-weight: 700;
+  border-bottom-color: var(--deep, #102c22);
 }
 
 .section-heading {
@@ -584,7 +689,7 @@ textarea {
 }
 
 .upload-dropzone input:focus-visible + label {
-  outline: 3px solid #e2a126;
+  outline: 3px solid var(--focus, #e2a126);
   outline-offset: 3px;
 }
 
@@ -664,6 +769,237 @@ textarea {
   margin-top: 0.75rem;
 }
 
+/* ============================================================= */
+/* Shared evidence-desk utilities (consumed across all screens)  */
+/* ============================================================= */
+
+/* White data surface on cream canvas. */
+.data-card {
+  padding: 1.4rem 1.5rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+}
+
+.data-card + .data-card {
+  margin-top: 1.25rem;
+}
+
+/* Eyebrow label: uppercase leaf-green kicker above a section title. */
+.section-eyebrow {
+  margin: 0 0 0.4rem;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Section header primitive (eyebrow + title + optional actions). */
+.section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.1rem;
+}
+
+.section-header-title {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+}
+
+.section-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Gate status chip: soft background + strong text pair from tokens. */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  padding: 0.3rem 0.62rem;
+  border-radius: 999px;
+  background: #eef1ef;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.status-chip::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.status-chip--ok { background: var(--ok-soft, #e9f3ed); color: var(--ok, #2e6b4e); }
+.status-chip--amber { background: var(--amber-soft, #fff7e8); color: var(--amber, #ba7d19); }
+.status-chip--risk { background: var(--risk-soft, #faeeea); color: var(--risk, #8f2f23); }
+.status-chip--info { background: var(--info-soft, #eaf1f5); color: var(--info, #31566b); }
+.status-chip--muted { background: #eef1ef; color: var(--ink-muted, #4f5f58); }
+
+/* Evidence chip ("chứng cứ"): the product's signature provenance marker. */
+.evidence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: 0.375rem;
+  background: var(--card, #ffffff);
+  color: var(--ink, #14261f);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+a.evidence-chip:hover {
+  border-color: var(--leaf, #35614f);
+}
+
+.evidence-chip-dot {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
+}
+
+.evidence-chip-label {
+  flex: 0 0 auto;
+  color: var(--leaf, #35614f);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.evidence-chip-doc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.evidence-chip-ver {
+  flex: 0 0 auto;
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+}
+
+/* Key-value table: quiet lined rows for dense fact surfaces. */
+.kv-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.kv-table caption {
+  margin-bottom: 0.75rem;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+.kv-table th,
+.kv-table td {
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--line, #c9d0cb);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  text-align: left;
+  vertical-align: top;
+}
+
+.kv-table thead th {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.kv-table tbody th {
+  color: var(--ink, #14261f);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.kv-table tbody tr:last-child th,
+.kv-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Tabular monospace numerals for currency / references. */
+.mono-num {
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Empty state: invites the next action, never a dead end. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 2rem 1.75rem;
+  border: 1px dashed var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  color: var(--ink-muted, #4f5f58);
+}
+
+.empty-state-title {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+
+.empty-state-hint {
+  margin: 0;
+  max-width: 42rem;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.empty-state-action {
+  margin-top: 0.4rem;
+}
+
+/* Single 160ms reveal on data load; suppressed for reduced motion. */
+.reveal {
+  animation: reveal 160ms ease-out both;
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(0.25rem); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { animation: none; }
+}
+
 @media (max-width: 760px) {
   .app-header {
     padding: 0.75rem 1rem;
@@ -690,10 +1026,6 @@ textarea {
   .case-facts {
     grid-template-columns: 1fr;
   }
-
-  .case-reference {
-    display: none;
-  }
 }
 
 @media (max-width: 460px) {
@@ -701,6 +1033,7 @@ textarea {
   .button-header { font-size: 0.78rem; }
   .page-heading h1 { font-size: 2.25rem; }
   .section-heading { flex-direction: column; }
+  .section-header { flex-direction: column; }
   .form-actions { align-items: stretch; flex-direction: column; }
   .upload-item-heading > div { align-items: flex-start; flex-direction: column; gap: 0.2rem; }
 }

@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
-  background: rgba(20, 43, 35, 0.45);
+  background: rgba(16, 44, 34, 0.5);
 }
 
 .dialog {
@@ -15,50 +15,69 @@
   max-height: calc(100vh - 3rem);
   overflow-y: auto;
   padding: 1.75rem;
-  border-radius: 0.9rem;
-  background: #fff;
-  box-shadow: 0 1.5rem 3rem rgba(20, 43, 35, 0.28);
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1.25rem 2.5rem rgba(16, 44, 34, 0.22);
+  animation: dialog-reveal 160ms ease-out;
 }
 
 .dialog:focus {
   outline: none;
 }
 
+.dialog h2 {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
 .body {
   margin: 0.9rem 0 0;
-  color: #3f4b45;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
   line-height: 1.65;
 }
 
+/* Open gaps still block a clean handoff: amber "Đang chờ" gate panel. */
 .warning {
-  margin: 1rem 0 0;
-  padding: 0.7rem 0.9rem;
-  border: 1px solid #b98a1f;
-  border-radius: 0.6rem;
-  background: #fdf1d8;
-  color: #7a5410;
+  margin: 1.1rem 0 0;
+  padding: 0.75rem 0.9rem;
+  border-left: 0.25rem solid var(--amber, #ba7d19);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--amber-soft, #fff7e8);
+  color: var(--amber, #ba7d19);
+  font-size: 0.875rem;
+  font-weight: 650;
+  line-height: 1.5;
 }
 
 .note {
-  margin: 1rem 0 0;
-  padding: 0.7rem 0.9rem;
-  border: 1px solid #cbd4cf;
-  border-radius: 0.6rem;
-  background: #f4f6f5;
-  color: #56665f;
+  margin: 1.1rem 0 0;
+  padding: 0.75rem 0.9rem;
+  border-left: 0.25rem solid var(--info, #31566b);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--info-soft, #eaf1f5);
+  color: var(--info, #31566b);
+  font-size: 0.8125rem;
+  line-height: 1.55;
 }
 
 .checkboxLabel {
   display: flex;
   align-items: flex-start;
   gap: 0.6rem;
-  margin: 1.1rem 0 0;
-  color: #142b23;
+  margin: 1.25rem 0 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
   line-height: 1.5;
 }
 
 .checkboxLabel input {
   margin-top: 0.2rem;
+  accent-color: var(--leaf, #35614f);
 }
 
 .actions {
@@ -66,4 +85,17 @@
   justify-content: flex-end;
   gap: 0.75rem;
   margin-top: 1.5rem;
+}
+
+@keyframes dialog-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog {
+    animation: none;
+  }
 }

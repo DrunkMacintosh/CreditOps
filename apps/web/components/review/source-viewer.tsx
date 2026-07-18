@@ -52,13 +52,44 @@ export function SourceViewer({
     (region) => region.source.page === currentPage,
   );
   const pageImage = pageImages?.find((image) => image.page === currentPage);
+  const selectedRegion = regions.find(
+    (region) => region.candidateId === selectedCandidateId,
+  );
+  const hint = selectedRegion
+    ? `Đang xem vùng nguồn của chứng cứ${
+        selectedRegion.index !== undefined ? ` #${selectedRegion.index}` : ""
+      }.`
+    : "Chọn một trường để xem vùng nguồn tương ứng.";
 
   return (
     <aside aria-label="Xem vùng nguồn tài liệu" className={styles.viewer}>
       <div className={styles.viewerToolbar}>
-        <span aria-live="polite">
+        <span className={styles.viewerTitle}>Vùng nguồn</span>
+        <span aria-live="polite" className={styles.pageIndicator}>
           Trang {currentPage}/{totalPages}
         </span>
+      </div>
+      <div className={styles.page}>
+        {pageImage ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            alt={`Trang ${currentPage} của tài liệu`}
+            className={styles.pageImage}
+            src={pageImage.url}
+          />
+        ) : (
+          <p className={styles.pagePlaceholder}>
+            Bản xem trước tài liệu chưa khả dụng.
+          </p>
+        )}
+        <SourceRegionOverlay
+          onSelect={(candidateId) => onSelectRegion?.(candidateId)}
+          regions={regionsOnPage}
+          selectedCandidateId={selectedCandidateId}
+        />
+      </div>
+      <div className={styles.viewerToolbar}>
+        <p className={styles.viewerHint}>{hint}</p>
         {totalPages > 1 ? (
           <span className={styles.pageControls}>
             <button
@@ -79,25 +110,6 @@ export function SourceViewer({
             </button>
           </span>
         ) : null}
-      </div>
-      <div className={styles.page}>
-        {pageImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            alt={`Trang ${currentPage} của tài liệu`}
-            className={styles.pageImage}
-            src={pageImage.url}
-          />
-        ) : (
-          <p className={styles.pagePlaceholder}>
-            Bản xem trước tài liệu chưa khả dụng.
-          </p>
-        )}
-        <SourceRegionOverlay
-          onSelect={(candidateId) => onSelectRegion?.(candidateId)}
-          regions={regionsOnPage}
-          selectedCandidateId={selectedCandidateId}
-        />
       </div>
     </aside>
   );

@@ -5,6 +5,8 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { creditOpsApi, getVietnameseApiError } from "../../lib/api/client";
 import type { CreditCaseListDto } from "../../lib/api/contracts";
+import { EvidenceChip, shortReference } from "./evidence-chip";
+import styles from "./case-list.module.css";
 
 interface CaseListProps {
   api?: Pick<typeof creditOpsApi, "listCases">;
@@ -80,64 +82,74 @@ export function CaseList({ api = creditOpsApi }: CaseListProps) {
   return (
     <>
       {collection.capabilities.canCreateCase ? (
-        <div className="collection-actions">
+        <div className={styles.toolbar}>
           <Link className="button button-primary" href="/ho-so/tao-moi">
             Tạo hồ sơ
           </Link>
         </div>
       ) : null}
-      <ul aria-label="Hồ sơ được phân công" className="case-grid">
-      {collection.items.map((creditCase) => {
-        const purpose = creditCase.purpose ?? "Chưa có mục đích vay vốn";
-        return (
-          <li className="case-card" key={creditCase.id}>
-            <article aria-labelledby={`case-${creditCase.id}`}>
-              <header className="case-card-header">
-                <div>
-                  <p className="case-kicker">Hồ sơ · phiên bản {creditCase.version}</p>
-                  <h2 id={`case-${creditCase.id}`}>{purpose}</h2>
+      <ul aria-label="Hồ sơ được phân công" className={styles.grid}>
+        {collection.items.map((creditCase) => {
+          const purpose = creditCase.purpose ?? "Chưa có mục đích vay vốn";
+          return (
+            <li className={styles.card} key={creditCase.id}>
+              <article aria-labelledby={`case-${creditCase.id}`}>
+                <div className={styles.provenance}>
+                  <EvidenceChip
+                    label={`Hồ sơ · phiên bản ${creditCase.version}`}
+                    reference={shortReference(creditCase.id)}
+                    title={`Mã hồ sơ: ${creditCase.id}`}
+                  />
                 </div>
-                {creditCase.workflowState ? (
-                  <span className="status-chip">
-                    {workflowStateLabel(creditCase.workflowState)}
-                  </span>
-                ) : null}
-              </header>
-              <dl className="case-facts">
-                <div>
-                  <dt>Số tiền đề nghị</dt>
-                  <dd>
-                    {creditCase.requestedAmount
-                      ? formatAmount(creditCase.requestedAmount)
-                      : "Chưa có dữ liệu"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Cập nhật</dt>
-                  <dd>
-                    {creditCase.updatedAt
-                      ? formatDate(creditCase.updatedAt)
-                      : "Chưa có dữ liệu"}
-                  </dd>
-                </div>
-              </dl>
-              <footer className="case-actions">
-                {creditCase.capabilities.canUpload ? (
-                  <Link
-                    aria-label={`Tiếp nhận tài liệu — ${purpose}`}
-                    className="button button-primary"
-                    href={`/ho-so/${encodeURIComponent(creditCase.id)}/tiep-nhan`}
-                  >
-                    Tiếp nhận tài liệu
-                  </Link>
-                ) : (
-                  <span className="permission-note">Không có quyền tải tài liệu</span>
-                )}
-              </footer>
-            </article>
-          </li>
-        );
-      })}
+                <header className={styles.cardHeader}>
+                  <h2 className={styles.purpose} id={`case-${creditCase.id}`}>
+                    {purpose}
+                  </h2>
+                  {creditCase.workflowState ? (
+                    <span className={`${styles.statusChip} ${workflowChipClass(creditCase.workflowState)}`}>
+                      {workflowStateLabel(creditCase.workflowState)}
+                    </span>
+                  ) : null}
+                </header>
+                <dl className={styles.facts}>
+                  <div>
+                    <dt>Số tiền đề nghị</dt>
+                    <dd className={styles.amount}>
+                      {creditCase.requestedAmount ? (
+                        formatAmount(creditCase.requestedAmount)
+                      ) : (
+                        <span className={styles.muted}>Chưa có dữ liệu</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Cập nhật</dt>
+                    <dd className={styles.timestamp}>
+                      {creditCase.updatedAt ? (
+                        formatDate(creditCase.updatedAt)
+                      ) : (
+                        <span className={styles.muted}>Chưa có dữ liệu</span>
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+                <footer className={styles.actions}>
+                  {creditCase.capabilities.canUpload ? (
+                    <Link
+                      aria-label={`Tiếp nhận tài liệu — ${purpose}`}
+                      className="button button-primary"
+                      href={`/ho-so/${encodeURIComponent(creditCase.id)}/tiep-nhan`}
+                    >
+                      Tiếp nhận tài liệu
+                    </Link>
+                  ) : (
+                    <span className={styles.permissionNote}>Không có quyền tải tài liệu</span>
+                  )}
+                </footer>
+              </article>
+            </li>
+          );
+        })}
       </ul>
     </>
   );
@@ -168,4 +180,13 @@ function workflowStateLabel(value: string): string {
     COMPLETED: "Đã hoàn tất tiếp nhận",
   };
   return labels[value] ?? "Trạng thái không xác định";
+}
+
+function workflowChipClass(value: string): string {
+  const classes: Readonly<Record<string, string>> = {
+    INTAKE: styles.chipInfo,
+    READY_FOR_SPECIALIST_REVIEW: styles.chipAmber,
+    COMPLETED: styles.chipOk,
+  };
+  return classes[value] ?? styles.chipMuted;
 }

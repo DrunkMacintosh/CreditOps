@@ -1,33 +1,176 @@
-.timeline {
+.section {
+  padding: 1.5rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-lg, 1.25rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+  animation: audit-reveal 160ms ease-out;
+}
+
+.header {
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: 0.4rem;
+  margin-bottom: 1.25rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--leaf, #35614f);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.empty {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* A true timeline: a continuous rail runs down the left gutter and every entry
+   hangs a status-coloured dot on it. The rail lives in the li padding, never
+   behind the tinted entry, so it stays unbroken across rows. */
+.timeline {
+  position: relative;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+.timeline::before {
+  content: "";
+  position: absolute;
+  top: 1.2rem;
+  bottom: 1.2rem;
+  left: 0.5rem;
+  width: 1px;
+  background: var(--line, #c9d0cb);
+}
+
 .event {
+  position: relative;
+  padding: 0.35rem 0 0.35rem 1.85rem;
+}
+
+.dot {
+  position: absolute;
+  top: 1.1rem;
+  left: 0.5rem;
+  width: 0.6rem;
+  height: 0.6rem;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: var(--leaf, #35614f);
+  box-shadow: 0 0 0 3px var(--card, #ffffff);
+}
+
+/* Entry types read at a glance from the dot colour alone — no loud fills. */
+.dotLeaf {
+  background: var(--leaf, #35614f);
+}
+
+.dotInfo {
+  background: var(--info, #31566b);
+}
+
+.dotOk {
+  background: var(--ok, #2e6b4e);
+}
+
+.dotRisk {
+  background: var(--risk, #8f2f23);
+}
+
+.dotMuted {
+  background: var(--ink-muted, #4f5f58);
+}
+
+.entry {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
-  padding: 1rem 1.125rem;
-  border: 1px solid #cbd4cf;
-  border-radius: 0.75rem;
-  background: #fff;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius, 0.75rem);
 }
 
-.event p {
-  margin: 0;
-  color: #4f5f58;
+/* Quiet alternating density: every other entry steps onto a faint cream band. */
+.event:nth-child(even) .entry {
+  background: var(--canvas, #f4f5f3);
+}
+
+.entryHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
 }
 
 .eventType {
-  display: inline-block;
-  width: fit-content;
-  padding: 0.15rem 0.5rem;
-  border-radius: 0.35rem;
-  background: #eef2ee;
-  color: #14261f;
-  font-size: 0.85rem;
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.time {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.meta {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.metaLabel {
+  color: var(--ink, #14261f);
+  font-weight: 600;
+}
+
+.metaVersion {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.ref {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.8125rem;
+}
+
+.loadMore {
+  margin-top: 1.25rem;
+}
+
+@keyframes audit-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section {
+    animation: none;
+  }
 }

@@ -1,6 +1,8 @@
 import React from "react";
 
 import type { UploadItem } from "../../lib/upload/upload-machine";
+import { EvidenceChip, shortReference } from "../cases/evidence-chip";
+import styles from "./upload-progress.module.css";
 
 interface UploadProgressProps {
   item: UploadItem;
@@ -11,16 +13,16 @@ interface UploadProgressProps {
 export function UploadProgress({ item, onCancel, onRetry }: UploadProgressProps) {
   const cancellable = item.status === "REQUESTING_INTENT" || item.status === "UPLOADING";
   return (
-    <li className="upload-item">
-      <div className="upload-item-heading">
-        <div>
-          <strong>{item.file.name}</strong>
-          <span>{formatBytes(item.file.size)}</span>
+    <li className={styles.item}>
+      <div className={styles.heading}>
+        <div className={styles.meta}>
+          <strong className={styles.name}>{item.file.name}</strong>
+          <span className={styles.size}>{formatBytes(item.file.size)}</span>
         </div>
         {cancellable ? (
           <button
             aria-label={`Hủy tải ${item.file.name}`}
-            className="text-button"
+            className={styles.cancel}
             onClick={() => onCancel(item.id)}
             type="button"
           >
@@ -30,18 +32,29 @@ export function UploadProgress({ item, onCancel, onRetry }: UploadProgressProps)
       </div>
 
       {item.status === "UPLOADING" ? (
-        <div className="progress-track" aria-label={`Tiến độ ${item.file.name}`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={item.progress} role="progressbar">
-          <span style={{ width: `${item.progress}%` }} />
+        <div className={styles.track} aria-label={`Tiến độ ${item.file.name}`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={item.progress} role="progressbar">
+          <span className={styles.fill} style={{ width: `${item.progress}%` }} />
         </div>
       ) : null}
 
-      <p aria-live="polite" className={`upload-state upload-state-${item.status.toLowerCase()}`}>
+      <p aria-live="polite" className={`${styles.state} ${stateTone(item)}`}>
         {statusText(item)}
       </p>
+
+      {item.status === "DUPLICATE" && item.duplicateOfDocumentId ? (
+        <div className={styles.evidence}>
+          <EvidenceChip
+            label="Tài liệu đã có"
+            reference={shortReference(item.duplicateOfDocumentId)}
+            title={`Mã tài liệu: ${item.duplicateOfDocumentId}`}
+          />
+        </div>
+      ) : null}
+
       {item.status === "FAILED" || item.status === "CANCELLED" ? (
         <button
           aria-label={`Thử lại ${item.file.name}`}
-          className="button button-secondary button-small"
+          className={`button button-secondary button-small ${styles.retry}`}
           onClick={() => onRetry(item.id)}
           type="button"
         >
@@ -71,6 +84,23 @@ function statusText(item: UploadItem): string {
   }
 }
 
+function stateTone(item: UploadItem): string {
+  switch (item.status) {
+    case "REQUESTING_INTENT":
+    case "UPLOADING":
+    case "VERIFYING":
+      return styles.toneInfo;
+    case "REGISTERED":
+      return taskStatusTone(item.taskStatus);
+    case "DUPLICATE":
+      return styles.toneMuted;
+    case "CANCELLED":
+      return styles.toneMuted;
+    case "FAILED":
+      return styles.toneRisk;
+  }
+}
+
 function taskStatusText(status: UploadItem["taskStatus"]): string {
   switch (status) {
     case "PENDING":
@@ -87,6 +117,23 @@ function taskStatusText(status: UploadItem["taskStatus"]): string {
       return "Tác vụ đã được thay thế";
     case null:
       return "Trạng thái tác vụ không xác định";
+  }
+}
+
+function taskStatusTone(status: UploadItem["taskStatus"]): string {
+  switch (status) {
+    case "PENDING":
+    case "RETRY_WAIT":
+      return styles.toneAmber;
+    case "RUNNING":
+      return styles.toneInfo;
+    case "SUCCEEDED":
+      return styles.toneOk;
+    case "FAILED_MANUAL_REVIEW":
+      return styles.toneRisk;
+    case "SUPERSEDED":
+    case null:
+      return styles.toneMuted;
   }
 }
 

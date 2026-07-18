@@ -43,13 +43,15 @@ const STATUS_BADGE_CLASSES: Readonly<Record<GapStatus, string>> = {
 export function GapList({ gaps }: { gaps: GapView[] }) {
   return (
     <section aria-labelledby="gap-list-heading">
-      <h2 id="gap-list-heading">Khoảng trống chứng cứ</h2>
+      <h2 className={styles.heading} id="gap-list-heading">
+        Khoảng trống chứng cứ
+      </h2>
       {gaps.length === 0 ? (
-        <p>Chưa ghi nhận khoảng trống chứng cứ.</p>
+        <p className={styles.empty}>Chưa ghi nhận khoảng trống chứng cứ.</p>
       ) : (
         <ul className={styles.list}>
           {gaps.map((gap) => (
-            <li className={styles.item} key={gap.id}>
+            <li className={styles.item} data-status={gap.status} key={gap.id}>
               <span className={`${styles.badge} ${STATUS_BADGE_CLASSES[gap.status]}`}>
                 {STATUS_LABELS_VI[gap.status]}
               </span>

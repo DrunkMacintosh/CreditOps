@@ -12,6 +12,7 @@ import {
 } from "../../lib/upload/upload-machine";
 import { DirectStorageError } from "../../lib/upload/signed-upload";
 import { UploadProgress } from "./upload-progress";
+import styles from "./upload-zone.module.css";
 
 const ACCEPTED_CONTENT = new Map([
   [".pdf", "application/pdf"],
@@ -237,20 +238,21 @@ export function UploadZone({
   }
 
   return (
-    <section aria-labelledby="upload-title" className="upload-panel">
-      <div className="section-heading">
+    <section aria-labelledby="upload-title" className={styles.panel}>
+      <div className={styles.heading}>
         <div>
-          <p className="eyebrow">Tải trực tiếp có kiểm soát</p>
-          <h2 id="upload-title">Thêm tài liệu vào hồ sơ</h2>
+          <p className={styles.eyebrow}>Tải trực tiếp có kiểm soát</p>
+          <h2 className={styles.title} id="upload-title">Thêm tài liệu vào hồ sơ</h2>
         </div>
-        <span className="private-badge">Kho riêng tư</span>
+        <span className={styles.privateBadge}>Kho riêng tư</span>
       </div>
-      <p className="section-copy">
+      <p className={styles.copy}>
         Bản trình diễn chỉ dùng tài liệu tổng hợp. Trình duyệt gửi tệp thẳng tới kho tài liệu bằng quyền tải lên ngắn hạn; backend phải xác minh đối tượng đã lưu trước khi đăng ký.
       </p>
-      <div className="upload-dropzone">
+      <div className={styles.dropzone}>
         <input
           accept={Array.from(ACCEPTED_CONTENT.keys()).join(",")}
+          className={styles.input}
           id="document-files"
           multiple
           onChange={selectFiles}
@@ -259,10 +261,10 @@ export function UploadZone({
         <label className="button button-primary" htmlFor="document-files">
           Chọn tài liệu
         </label>
-        <span>PDF, PNG, JPEG, DOCX hoặc XLSX</span>
+        <span className={styles.hint}>PDF, PNG, JPEG, DOCX hoặc XLSX</span>
       </div>
       {items.length > 0 ? (
-        <ul aria-label="Tiến độ tải tài liệu" className="upload-list">
+        <ul aria-label="Tiến độ tải tài liệu" className={styles.list}>
           {items.map((item) => (
             <UploadProgress
               item={item}

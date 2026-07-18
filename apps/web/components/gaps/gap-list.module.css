@@ -1,77 +1,134 @@
+.heading {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.empty {
+  margin: 0.6rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
 .list {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  margin: 1rem 0 0;
+  margin: 1.25rem 0 0;
   padding: 0;
   list-style: none;
 }
 
 .item {
-  padding: 1.1rem 1.3rem;
-  border: 1px solid #cbd4cf;
-  border-radius: 0.75rem;
-  background: #fff;
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-left: 0.25rem solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 1px 2px rgba(16, 44, 34, 0.06);
+  animation: gap-reveal 160ms ease-out;
 }
 
+.item[data-status="PROVISIONAL"] {
+  border-left-color: var(--amber, #ba7d19);
+}
+
+.item[data-status="FORMAL"] {
+  border-left-color: var(--info, #31566b);
+}
+
+.item[data-status="RESOLVED"] {
+  border-left-color: var(--ok, #2e6b4e);
+}
+
+.item[data-status="STALE"] {
+  border-left-color: var(--line, #c9d0cb);
+}
+
+/* Gate chip: soft background + strong text, matching the status vocabulary. */
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 0.2rem 0.65rem;
-  border-radius: 999px;
-  margin-bottom: 0.6rem;
-  font-size: 0.78rem;
-  font-weight: 750;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.375rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .badgeProvisional {
-  border: 1px solid #b98a1f;
-  background: #fdf1d8;
-  color: #7a5410;
+  background: var(--amber-soft, #fff7e8);
+  color: var(--amber, #ba7d19);
 }
 
 .badgeFormal {
-  border: 1px solid #2f6f52;
-  background: #e0efe6;
-  color: #1a4a38;
+  background: var(--info-soft, #eaf1f5);
+  color: var(--info, #31566b);
 }
 
 .badgeResolved {
-  border: 1px solid #3a6ea5;
-  background: #e1ecf7;
-  color: #204a72;
+  background: var(--ok-soft, #e9f3ed);
+  color: var(--ok, #2e6b4e);
 }
 
 .badgeStale {
-  border: 1px solid #8a8f96;
-  background: #eceef0;
-  color: #4d5359;
+  background: var(--canvas, #f4f5f3);
+  color: var(--ink-muted, #4f5f58);
 }
 
 .issue {
   margin: 0 0 0.4rem;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
   font-weight: 700;
-  color: #142b23;
+  line-height: 1.5;
 }
 
 .missingInformation {
   margin: 0;
-  color: #56665f;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
 }
 
 .suggestions {
-  margin: 0.8rem 0 0;
+  margin: 1rem 0 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line, #c9d0cb);
 }
 
 .suggestionLabel {
-  margin: 0 0 0.4rem;
-  color: #68736f;
-  font-size: 0.82rem;
-  font-style: italic;
+  margin: 0 0 0.5rem;
+  color: var(--leaf, #35614f);
+  font-size: 0.8125rem;
+  font-weight: 700;
 }
 
 .suggestionList {
   margin: 0;
   padding-left: 1.2rem;
-  color: #3f4b45;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.suggestionList li {
+  margin: 0.15rem 0;
+}
+
+@keyframes gap-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .item {
+    animation: none;
+  }
 }

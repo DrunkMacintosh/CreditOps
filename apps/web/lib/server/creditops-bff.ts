@@ -351,11 +351,78 @@ function validateAndReconstructMutation(
     return hasExactKeys(value, []) ? {} : null;
   }
 
+  if (isOrchestrationAdvance(segments)) {
+    return hasExactKeys(value, []) ? {} : null;
+  }
+
+  if (isRiskReviewDisposition(segments)) {
+    return canonicalizeRiskDisposition(value);
+  }
+
+  if (isCreditOpsAuthorization(segments)) {
+    return canonicalizeCreditOpsAuthorization(value);
+  }
+
   if (isConfirmationSubmission(segments)) {
     return canonicalizeConfirmation(value);
   }
 
   return null;
+}
+
+function isOrchestrationAdvance(segments: string[]): boolean {
+  const path = `/${segments.join("/")}`;
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/orchestration\/advance$/.test(path);
+}
+
+function isRiskReviewDisposition(segments: string[]): boolean {
+  const path = `/${segments.join("/")}`;
+  return (
+    /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/risk-review\/disposition$/.test(path) ||
+    /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/risk-review\/challenges\/[A-Za-z0-9_-]+\/disposition$/.test(
+      path,
+    )
+  );
+}
+
+function canonicalizeRiskDisposition(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["dispositionType", "rationale"])) return null;
+  const dispositionType = normalizedString(value.dispositionType, 1, 50);
+  const rationale = normalizedString(value.rationale, 1, 4000);
+  if (
+    dispositionType === null ||
+    !/^[A-Z_]+$/.test(dispositionType) ||
+    rationale === null ||
+    looksLikeDocumentBytes(rationale)
+  ) {
+    return null;
+  }
+  return { dispositionType, rationale };
+}
+
+function isCreditOpsAuthorization(segments: string[]): boolean {
+  const path = `/${segments.join("/")}`;
+  return (
+    /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/credit-ops\/actions\/[A-Za-z0-9_-]+\/authorize$/.test(
+      path,
+    ) ||
+    /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/credit-ops\/document-requests\/[A-Za-z0-9_-]+\/approve$/.test(
+      path,
+    )
+  );
+}
+
+// Mirrors backend RecordAuthorizationRequest: exactly {rationale}, 1-4000 chars,
+// extra keys forbidden (credit_ops.py, model_config extra="forbid").
+function canonicalizeCreditOpsAuthorization(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["rationale"])) return null;
+  const rationale = normalizedString(value.rationale, 1, 4000);
+  if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+  return { rationale };
 }
 
 function isConfirmationSubmission(segments: string[]): boolean {
@@ -522,7 +589,28 @@ function allowlisted(method: string, segments: string[]): boolean {
     (method === "GET" && /^\/api\/v1\/documents\/[A-Za-z0-9_-]+\/review$/.test(path)) ||
     (method === "POST" && /^\/api\/v1\/documents\/[A-Za-z0-9_-]+\/confirmations$/.test(path)) ||
     (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/evidence$/.test(path)) ||
-    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conflicts$/.test(path))
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conflicts$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/orchestration$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/orchestration\/advance$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/underwriting$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/legal$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/risk-review$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/risk-review\/disposition$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/risk-review\/challenges\/[A-Za-z0-9_-]+\/disposition$/.test(
+        path,
+      )) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/credit-ops$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/credit-ops\/actions\/[A-Za-z0-9_-]+\/authorize$/.test(
+        path,
+      )) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/credit-ops\/document-requests\/[A-Za-z0-9_-]+\/approve$/.test(
+        path,
+      ))
   );
 }
 

@@ -10,6 +10,9 @@ export interface OverlayRegion {
   candidateId: string;
   fieldKey: string;
   source: PageRegionDto;
+  // 1-based marker matching the numbered field card, so the officer can pair
+  // an extracted field with its highlighted region at a glance.
+  index?: number;
 }
 
 interface SourceRegionOverlayProps {
@@ -45,7 +48,13 @@ export function SourceRegionOverlay({
               height: `${region.source.height * 100}%`,
             }}
             type="button"
-          />
+          >
+            {region.index !== undefined ? (
+              <span aria-hidden="true" className={styles.regionIndex}>
+                {region.index}
+              </span>
+            ) : null}
+          </button>
         );
       })}
     </div>
