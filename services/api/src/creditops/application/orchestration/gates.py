@@ -44,6 +44,14 @@ INTAKE_DISPOSITION_REF = "intake-handoff"
 #: requires its own human disposition before G3 may derive SATISFIED.
 G3_SEVERITY_THRESHOLD: ChallengeSeverity = ChallengeSeverity.HIGH
 
+#: PROPOSED synthetic configuration -- no official SHB disposition taxonomy
+#: exists.  "Đã disposition" is NOT "được tiếp tục" (master design section
+#: 6): only these continue-authorizing types may satisfy
+#: ``G3_RISK_DISPOSITION``.  ``MAKER_MUST_REVISE`` demands a maker revision
+#: (Credit Operations must never open from it) and ``ESCALATED`` awaits a
+#: higher-authority outcome; both leave the gate OPEN, fail closed.
+G3_CONTINUE_DISPOSITION_TYPES: frozenset[str] = frozenset({"NOTED", "ACCEPTED_RISK"})
+
 _SEVERITY_ORDER: Mapping[ChallengeSeverity, int] = {
     ChallengeSeverity.LOW: 0,
     ChallengeSeverity.MEDIUM: 1,
@@ -103,8 +111,8 @@ def derive_g3_status(
     *,
     assessment_exists: bool,
     challenge_severities: Mapping[UUID, ChallengeSeverity],
-    disposed_challenge_ids: Set[UUID],
-    has_assessment_level_disposition: bool,
+    latest_challenge_dispositions: Mapping[UUID, str],
+    latest_assessment_level_disposition: str | None,
     severity_threshold: ChallengeSeverity = G3_SEVERITY_THRESHOLD,
 ) -> GateStatus:
     """Whether G3_RISK_DISPOSITION MAY derive SATISFIED right now.
@@ -114,16 +122,21 @@ def derive_g3_status(
     - a checker (Independent Risk Review) assessment exists for the case
       version -- silence is never satisfaction, an empty/never-run review
       cannot satisfy the gate;
-    - every challenge at or above ``severity_threshold`` has its own human
-      disposition (``disposed_challenge_ids``); and
+    - every challenge at or above ``severity_threshold`` has a human
+      disposition whose LATEST type is continue-authorizing
+      (``G3_CONTINUE_DISPOSITION_TYPES``) -- a MAKER_MUST_REVISE or
+      ESCALATED latest disposition leaves the gate OPEN because "đã
+      disposition" is not "được tiếp tục"; and
     - when there are ZERO such severe challenges, an explicit
-      assessment-level human disposition still exists (a human NOTED the
-      empty-challenge outcome) -- G3 can never derive SATISFIED purely
-      because the checker happened to find nothing severe.
+      assessment-level human disposition with a continue-authorizing type
+      still exists (a human NOTED the empty-challenge outcome) -- G3 can
+      never derive SATISFIED purely because the checker happened to find
+      nothing severe.
 
     The checker's own output can never satisfy this on its own: every path
-    to SATISFIED requires at least one entry in ``disposed_challenge_ids`` or
-    ``has_assessment_level_disposition``, both of which are populated
+    to SATISFIED requires at least one entry in
+    ``latest_challenge_dispositions`` or a non-``None``
+    ``latest_assessment_level_disposition``, both of which are populated
     exclusively from ``challenge_dispositions`` rows -- append-only, human-
     authored, actor-and-role-captured (supabase/migrations/202607180005_
     risk_review.sql).
@@ -139,10 +152,18 @@ def derive_g3_status(
     if severe_ids:
         return (
             GateStatus.SATISFIED
-            if severe_ids <= set(disposed_challenge_ids)
+            if all(
+                latest_challenge_dispositions.get(challenge_id)
+                in G3_CONTINUE_DISPOSITION_TYPES
+                for challenge_id in severe_ids
+            )
             else GateStatus.OPEN
         )
-    return GateStatus.SATISFIED if has_assessment_level_disposition else GateStatus.OPEN
+    return (
+        GateStatus.SATISFIED
+        if latest_assessment_level_disposition in G3_CONTINUE_DISPOSITION_TYPES
+        else GateStatus.OPEN
+    )
 
 
 def derive_g2_status(

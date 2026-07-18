@@ -264,7 +264,7 @@ class PostgresRiskReviewRepository:
                        rationale_vi, actor_id, actor_role, created_at
                 from public.challenge_dispositions
                 where case_id = %s and case_version = %s
-                order by created_at
+                order by created_at, id
                 """,
                 (case_id, case_version),
             )

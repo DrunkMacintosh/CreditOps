@@ -7,6 +7,11 @@ Requirements exercised:
 (f) human disposition required: G3 stays OPEN with zero dispositions even
     when the checker found nothing severe; an explicit assessment-level
     NOTED disposition is required before G3 may derive SATISFIED.
+(g) disposition semantics: "đã disposition" is NOT "được tiếp tục" (master
+    design section 6).  Only continue-authorizing types (NOTED,
+    ACCEPTED_RISK) may satisfy G3; MAKER_MUST_REVISE demands a maker
+    revision and ESCALATED awaits a higher authority -- both leave the gate
+    OPEN, fail closed.  The latest disposition per challenge governs.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from creditops.application.orchestration.gates import (
+    G3_CONTINUE_DISPOSITION_TYPES,
     G3_SEVERITY_THRESHOLD,
     derive_g3_status,
 )
@@ -21,13 +27,19 @@ from creditops.domain.orchestration import GateStatus
 from creditops.domain.risk_review import ChallengeSeverity
 
 
+def test_continue_authorizing_types_are_the_labelled_synthetic_config() -> None:
+    # PROPOSED synthetic configuration: no official SHB disposition taxonomy
+    # exists, so the continue set is pinned and reviewed here.
+    assert G3_CONTINUE_DISPOSITION_TYPES == frozenset({"NOTED", "ACCEPTED_RISK"})
+
+
 def test_no_assessment_yet_stays_open() -> None:
     assert (
         derive_g3_status(
             assessment_exists=False,
             challenge_severities={},
-            disposed_challenge_ids=set(),
-            has_assessment_level_disposition=False,
+            latest_challenge_dispositions={},
+            latest_assessment_level_disposition=None,
         )
         is GateStatus.OPEN
     )
@@ -40,8 +52,8 @@ def test_empty_challenge_case_requires_explicit_assessment_level_disposition() -
         derive_g3_status(
             assessment_exists=True,
             challenge_severities={},
-            disposed_challenge_ids=set(),
-            has_assessment_level_disposition=False,
+            latest_challenge_dispositions={},
+            latest_assessment_level_disposition=None,
         )
         is GateStatus.OPEN
     )
@@ -52,14 +64,14 @@ def test_empty_challenge_case_satisfied_once_noted() -> None:
         derive_g3_status(
             assessment_exists=True,
             challenge_severities={},
-            disposed_challenge_ids=set(),
-            has_assessment_level_disposition=True,
+            latest_challenge_dispositions={},
+            latest_assessment_level_disposition="NOTED",
         )
         is GateStatus.SATISFIED
     )
 
 
-def test_severe_challenges_require_every_one_to_be_disposed() -> None:
+def test_severe_challenges_require_every_one_to_be_continue_disposed() -> None:
     severe_a, severe_b = uuid4(), uuid4()
     severities = {severe_a: ChallengeSeverity.HIGH, severe_b: ChallengeSeverity.CRITICAL}
 
@@ -68,21 +80,92 @@ def test_severe_challenges_require_every_one_to_be_disposed() -> None:
         derive_g3_status(
             assessment_exists=True,
             challenge_severities=severities,
-            disposed_challenge_ids={severe_a},
-            has_assessment_level_disposition=False,
+            latest_challenge_dispositions={severe_a: "ACCEPTED_RISK"},
+            latest_assessment_level_disposition=None,
         )
         is GateStatus.OPEN
     )
 
-    # Both disposed: SATISFIED, WITHOUT needing an assessment-level disposition.
+    # Both continue-disposed: SATISFIED, WITHOUT an assessment-level record.
     assert (
         derive_g3_status(
             assessment_exists=True,
             challenge_severities=severities,
-            disposed_challenge_ids={severe_a, severe_b},
-            has_assessment_level_disposition=False,
+            latest_challenge_dispositions={
+                severe_a: "ACCEPTED_RISK",
+                severe_b: "NOTED",
+            },
+            latest_assessment_level_disposition=None,
         )
         is GateStatus.SATISFIED
+    )
+
+
+def test_maker_must_revise_never_satisfies_g3() -> None:
+    # (g) MAKER_MUST_REVISE demands a maker revision; the case must NOT
+    # continue to Credit Operations (master design sections 6 and 9).
+    severe_id = uuid4()
+    assert (
+        derive_g3_status(
+            assessment_exists=True,
+            challenge_severities={severe_id: ChallengeSeverity.HIGH},
+            latest_challenge_dispositions={severe_id: "MAKER_MUST_REVISE"},
+            latest_assessment_level_disposition=None,
+        )
+        is GateStatus.OPEN
+    )
+
+
+def test_escalated_never_satisfies_g3() -> None:
+    # (g) ESCALATED awaits a higher-authority outcome; fail closed.
+    severe_id = uuid4()
+    assert (
+        derive_g3_status(
+            assessment_exists=True,
+            challenge_severities={severe_id: ChallengeSeverity.CRITICAL},
+            latest_challenge_dispositions={severe_id: "ESCALATED"},
+            latest_assessment_level_disposition=None,
+        )
+        is GateStatus.OPEN
+    )
+
+
+def test_latest_disposition_per_challenge_governs() -> None:
+    # A challenge first sent back for revision and LATER accepted may
+    # continue; the mapping carries the latest type per challenge.
+    severe_id = uuid4()
+    assert (
+        derive_g3_status(
+            assessment_exists=True,
+            challenge_severities={severe_id: ChallengeSeverity.HIGH},
+            latest_challenge_dispositions={severe_id: "ACCEPTED_RISK"},
+            latest_assessment_level_disposition=None,
+        )
+        is GateStatus.SATISFIED
+    )
+    # ...and the reverse (accepted, then sent back) leaves the gate OPEN.
+    assert (
+        derive_g3_status(
+            assessment_exists=True,
+            challenge_severities={severe_id: ChallengeSeverity.HIGH},
+            latest_challenge_dispositions={severe_id: "MAKER_MUST_REVISE"},
+            latest_assessment_level_disposition=None,
+        )
+        is GateStatus.OPEN
+    )
+
+
+def test_non_continue_assessment_level_disposition_stays_open() -> None:
+    # Fail closed even at the assessment level: only a continue-authorizing
+    # type satisfies the empty/low-severity path.
+    assert (
+        derive_g3_status(
+            assessment_exists=True,
+            challenge_severities={},
+            latest_challenge_dispositions={},
+            latest_assessment_level_disposition="ESCALATED",
+        )
+        is GateStatus.OPEN
     )
 
 
@@ -95,8 +178,8 @@ def test_low_and_medium_challenges_never_require_disposition_for_g3() -> None:
         derive_g3_status(
             assessment_exists=True,
             challenge_severities=severities,
-            disposed_challenge_ids=set(),
-            has_assessment_level_disposition=True,
+            latest_challenge_dispositions={},
+            latest_assessment_level_disposition="NOTED",
         )
         is GateStatus.SATISFIED
     )
@@ -109,8 +192,8 @@ def test_disposing_a_non_severe_challenge_does_not_substitute_for_severe_ones() 
         derive_g3_status(
             assessment_exists=True,
             challenge_severities=severities,
-            disposed_challenge_ids={low_id},  # the severe one is untouched
-            has_assessment_level_disposition=True,
+            latest_challenge_dispositions={low_id: "ACCEPTED_RISK"},
+            latest_assessment_level_disposition="NOTED",
         )
         is GateStatus.OPEN
     )
@@ -125,8 +208,8 @@ def test_checker_output_alone_can_never_satisfy_g3() -> None:
         derive_g3_status(
             assessment_exists=True,
             challenge_severities={challenge_id: ChallengeSeverity.CRITICAL},
-            disposed_challenge_ids=set(),
-            has_assessment_level_disposition=False,
+            latest_challenge_dispositions={},
+            latest_assessment_level_disposition=None,
         )
         is GateStatus.OPEN
     )

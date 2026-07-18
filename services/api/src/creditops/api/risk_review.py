@@ -214,8 +214,14 @@ async def get_risk_review(
     gate_status = derive_g3_status(
         assessment_exists=True,
         challenge_severities=severities,
-        disposed_challenge_ids=set(by_challenge.keys()),
-        has_assessment_level_disposition=bool(assessment_level),
+        latest_challenge_dispositions={
+            challenge_id: bound[-1].disposition_type
+            for challenge_id, bound in by_challenge.items()
+            if bound
+        },
+        latest_assessment_level_disposition=(
+            assessment_level[-1].disposition_type if assessment_level else None
+        ),
     )
 
     return RiskReviewStatusResponse(
@@ -350,8 +356,16 @@ async def _maybe_satisfy_g3(
         return
     repository = _repository(request)
     dispositions = await repository.load_dispositions(record.case_id, record.case_version)
-    disposed_ids = {d.challenge_id for d in dispositions if d.challenge_id is not None}
-    has_assessment_level = any(d.challenge_id is None for d in dispositions)
+    # The repository returns dispositions in recording order (created_at, id):
+    # for each challenge -- and for the assessment level -- the LATEST
+    # disposition type governs whether the case may continue.
+    latest_by_challenge: dict[UUID, str] = {}
+    latest_assessment_level: str | None = None
+    for disposition in dispositions:
+        if disposition.challenge_id is None:
+            latest_assessment_level = disposition.disposition_type
+        else:
+            latest_by_challenge[disposition.challenge_id] = disposition.disposition_type
     raw_challenges = record.assessment.get("challenges", [])
     severities = {
         UUID(str(item["id"])): ChallengeSeverity(str(item["severity"]))
@@ -361,8 +375,8 @@ async def _maybe_satisfy_g3(
     status = derive_g3_status(
         assessment_exists=True,
         challenge_severities=severities,
-        disposed_challenge_ids=disposed_ids,
-        has_assessment_level_disposition=has_assessment_level,
+        latest_challenge_dispositions=latest_by_challenge,
+        latest_assessment_level_disposition=latest_assessment_level,
     )
     if status is not GateStatus.SATISFIED:
         return

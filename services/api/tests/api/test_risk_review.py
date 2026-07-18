@@ -312,9 +312,12 @@ def test_no_risk_review_yet_is_404(
     assert response.json()["code"] == "RISK_REVIEW_NOT_AVAILABLE"
 
 
-def test_risk_reviewer_can_record_a_challenge_disposition(
+def test_maker_must_revise_records_but_never_satisfies_g3(
     signing_key: rsa.RSAPrivateKey,
 ) -> None:
+    # Master design sections 6 and 9: MAKER_MUST_REVISE demands a maker
+    # revision -- the disposition is recorded, but the case must NOT continue
+    # past G3 and Credit Operations must NOT open.
     repository = FakeRiskReviewRepository()
     orchestration = FakeOrchestrationRepository()
     client = _build_client(
@@ -333,13 +336,64 @@ def test_risk_reviewer_can_record_a_challenge_disposition(
     assert body["actorRole"] == RISK_REVIEWER_ROLE
     assert body["actorId"] == str(OFFICER_A)
     assert len(repository.dispositions) == 1
-    # One HIGH-severity challenge, now disposed: G3 becomes SATISFIED and the
-    # human-triggered write path records it -- the checker never does this.
+    assert orchestration.ensure_gate_calls == []
+
+
+def test_risk_reviewer_can_record_a_challenge_disposition(
+    signing_key: rsa.RSAPrivateKey,
+) -> None:
+    repository = FakeRiskReviewRepository()
+    orchestration = FakeOrchestrationRepository()
+    client = _build_client(
+        signing_key, repository=repository, orchestration_repository=orchestration
+    )
+
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/risk-review/challenges/{CHALLENGE_ID}/disposition",
+        json={"dispositionType": "ACCEPTED_RISK", "rationale": "Rui ro da duoc chap nhan."},
+        headers={"Authorization": f"Bearer {token(signing_key)}"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["dispositionType"] == "ACCEPTED_RISK"
+    assert body["actorRole"] == RISK_REVIEWER_ROLE
+    assert body["actorId"] == str(OFFICER_A)
+    assert len(repository.dispositions) == 1
+    # One HIGH-severity challenge, continue-disposed: G3 becomes SATISFIED and
+    # the human-triggered write path records it -- the checker never does this.
     assert len(orchestration.ensure_gate_calls) == 1
     call = orchestration.ensure_gate_calls[0]
     assert call["gate_type"] == GateType.G3_RISK_DISPOSITION
     assert call["status"] == GateStatus.SATISFIED
     assert call["satisfied_by_actor_id"] == OFFICER_A
+
+
+def test_revise_then_accept_satisfies_g3_on_the_later_disposition(
+    signing_key: rsa.RSAPrivateKey,
+) -> None:
+    # The latest disposition per challenge governs: first sent back for
+    # revision (gate stays OPEN), later accepted (gate satisfies).
+    repository = FakeRiskReviewRepository()
+    orchestration = FakeOrchestrationRepository()
+    client = _build_client(
+        signing_key, repository=repository, orchestration_repository=orchestration
+    )
+    headers = {"Authorization": f"Bearer {token(signing_key)}"}
+    url = f"/api/v1/cases/{CASE_ID}/risk-review/challenges/{CHALLENGE_ID}/disposition"
+
+    first = client.post(
+        url, json={"dispositionType": "MAKER_MUST_REVISE", "rationale": "Can sua."}, headers=headers
+    )
+    assert first.status_code == 201
+    assert orchestration.ensure_gate_calls == []
+
+    second = client.post(
+        url, json={"dispositionType": "ACCEPTED_RISK", "rationale": "Da xu ly."}, headers=headers
+    )
+    assert second.status_code == 201
+    assert len(orchestration.ensure_gate_calls) == 1
+    assert orchestration.ensure_gate_calls[0]["status"] == GateStatus.SATISFIED
 
 
 def test_disposition_endpoint_rejects_non_risk_reviewer_actors(
