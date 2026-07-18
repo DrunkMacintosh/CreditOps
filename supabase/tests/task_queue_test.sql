@@ -20,31 +20,40 @@ select is(
 select has_function('pgmq', 'read', 'workers can lease messages with pgmq.read');
 select has_function('pgmq', 'archive', 'workers can archive completed messages');
 
-select ok(
-  has_function_privilege(
-    'service_role',
-    'pgmq.send(text,jsonb,integer)',
-    'EXECUTE'
+-- Check EXECUTE by function name (not a hard-coded signature) so the assertion
+-- tracks the migration's name-based grants and survives pgmq upgrades that add
+-- defaulted parameters to send/read/archive.
+select is(
+  (
+    select coalesce(bool_or(has_function_privilege('service_role', proc.oid, 'EXECUTE')), false)
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'pgmq' and proc.proname = 'send'
   ),
-  'service_role has exact EXECUTE on queue send'
+  true,
+  'service_role has EXECUTE on queue send'
 );
 
-select ok(
-  has_function_privilege(
-    'service_role',
-    'pgmq.read(text,integer,integer)',
-    'EXECUTE'
+select is(
+  (
+    select coalesce(bool_or(has_function_privilege('service_role', proc.oid, 'EXECUTE')), false)
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'pgmq' and proc.proname = 'read'
   ),
-  'service_role has exact EXECUTE on queue read'
+  true,
+  'service_role has EXECUTE on queue read'
 );
 
-select ok(
-  has_function_privilege(
-    'service_role',
-    'pgmq.archive(text,bigint)',
-    'EXECUTE'
+select is(
+  (
+    select coalesce(bool_or(has_function_privilege('service_role', proc.oid, 'EXECUTE')), false)
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'pgmq' and proc.proname = 'archive'
   ),
-  'service_role has exact EXECUTE on queue archive'
+  true,
+  'service_role has EXECUTE on queue archive'
 );
 
 select is(

@@ -173,9 +173,33 @@ revoke all on all tables in schema pgmq from anon, authenticated;
 revoke execute on all functions in schema pgmq
   from public, anon, authenticated, service_role;
 grant usage on schema pgmq to service_role;
-grant execute on function pgmq.send(text, jsonb, integer) to service_role;
-grant execute on function pgmq.read(text, integer, integer) to service_role;
-grant execute on function pgmq.archive(text, bigint) to service_role;
+
+-- Grant EXECUTE by function name rather than a hard-coded signature so the
+-- migration survives pgmq extension upgrades that add defaulted parameters.
+-- (pgmq.read gained a `conditional jsonb DEFAULT '{}'` argument, changing its
+-- registered signature from read(text,integer,integer) to
+-- read(text,integer,integer,jsonb); a fixed-signature grant then fails with
+-- SQLSTATE 42883.) Only send/read/archive are exposed here; destructive or
+-- non-durable operations such as pgmq.pop stay revoked from service_role.
+do $$
+declare
+  fn record;
+begin
+  for fn in
+    select p.proname as name,
+           pg_catalog.pg_get_function_identity_arguments(p.oid) as args
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pgmq'
+      and p.proname in ('send', 'read', 'archive')
+  loop
+    execute format(
+      'grant execute on function pgmq.%I(%s) to service_role',
+      fn.name, fn.args
+    );
+  end loop;
+end;
+$$;
 
 alter table public.processing_tasks enable row level security;
 alter table public.processing_tasks force row level security;
