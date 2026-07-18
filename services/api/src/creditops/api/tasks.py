@@ -31,7 +31,8 @@ class TaskResponse(BaseModel):
     id: UUID
     case_id: UUID = Field(serialization_alias="caseId")
     case_version: int = Field(serialization_alias="caseVersion")
-    document_version_id: UUID = Field(serialization_alias="documentVersionId")
+    task_type: str = Field(serialization_alias="taskType")
+    document_version_id: UUID | None = Field(serialization_alias="documentVersionId")
     status: str
     attempt_count: int = Field(serialization_alias="attemptCount")
     max_attempts: int = Field(serialization_alias="maxAttempts")
@@ -70,6 +71,7 @@ def _response(task: TaskRecord, checkpoint: TaskCheckpoint | None) -> TaskRespon
         id=task.id,
         case_id=task.case_id,
         case_version=task.case_version,
+        task_type=task.task_type.value,
         document_version_id=task.document_version_id,
         status=task.status.value,
         attempt_count=task.attempt_count,

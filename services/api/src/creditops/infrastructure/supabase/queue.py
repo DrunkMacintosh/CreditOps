@@ -15,13 +15,18 @@ from creditops.infrastructure.postgres.repositories import DatabaseConnection
 
 ConnectionFactory = Callable[[], AbstractAsyncContextManager[DatabaseConnection]]
 
+# Document-pipeline messages and agent-task messages travel on separate queues
+# so orchestration work cannot starve (or be starved by) document processing.
+DOCUMENT_TASK_QUEUE_NAME = "creditops_document_tasks"
+AGENT_TASK_QUEUE_NAME = "creditops_agent_tasks"
+
 
 class SupabaseQueue(QueuePort):
     def __init__(
         self,
         connection: DatabaseConnection | ConnectionFactory,
         *,
-        queue_name: str = "creditops_document_tasks",
+        queue_name: str = DOCUMENT_TASK_QUEUE_NAME,
     ) -> None:
         if not queue_name or not queue_name.replace("_", "").isalnum():
             raise ValueError("queue name must be a simple SQL identifier")

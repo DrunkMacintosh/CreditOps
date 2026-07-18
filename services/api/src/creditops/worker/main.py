@@ -7,6 +7,7 @@ from creditops.application.ports.queue import QueuePort, TaskRepository
 from creditops.application.use_cases.run_worker_once import (
     RunWorkerOnce,
     TaskProcessor,
+    TaskProcessorRegistry,
     WorkerOutcome,
     WorkerRunResult,
 )
@@ -18,13 +19,14 @@ async def run_once(
     *,
     tasks: TaskRepository,
     queue: QueuePort,
-    processor: TaskProcessor,
+    processor: TaskProcessor | TaskProcessorRegistry,
 ) -> WorkerRunResult:
     """Run one real injected worker execution.
 
     There is intentionally no synthetic processor or preloaded result.  Cloud
-    Run wiring must supply the Storage/FPT-backed processor before this entry
-    point can be enabled outside tests.
+    Run wiring must supply the Storage/FPT-backed processor registry before this
+    entry point can be enabled outside tests.  ``processor`` may be a single
+    processor (legacy) or a per-task-type registry.
     """
     return await RunWorkerOnce(tasks, queue, processor).run_once()
 
@@ -33,7 +35,7 @@ def main(
     *,
     tasks: TaskRepository | None = None,
     queue: QueuePort | None = None,
-    processor: TaskProcessor | None = None,
+    processor: TaskProcessor | TaskProcessorRegistry | None = None,
 ) -> None:
     settings = Settings()
     configure_structured_logging(

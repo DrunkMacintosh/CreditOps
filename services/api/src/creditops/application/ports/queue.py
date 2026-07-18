@@ -14,6 +14,7 @@ from typing import Protocol
 from uuid import UUID
 
 from creditops.domain.enums import TaskStatus
+from creditops.domain.orchestration import TaskType
 from creditops.domain.tasks import TaskEnvelopeV1
 
 
@@ -51,7 +52,7 @@ class TaskRecord:
     id: UUID
     case_id: UUID
     case_version: int
-    document_version_id: UUID
+    document_version_id: UUID | None
     status: TaskStatus
     attempt_count: int
     max_attempts: int
@@ -61,6 +62,7 @@ class TaskRecord:
     input_schema_version: str
     input_payload: Mapping[str, object]
     idempotency_key: str
+    task_type: TaskType = TaskType.DOCUMENT_INGESTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +70,7 @@ class TaskCheckpoint:
     task_id: UUID
     case_id: UUID
     case_version: int
-    document_version_id: UUID
+    document_version_id: UUID | None
     sequence_no: int
     checkpoint_type: str
     checkpoint_schema_version: str
@@ -121,7 +123,7 @@ class TaskRepository(Protocol):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
         lease_until: datetime,
     ) -> TaskRecord | None: ...
@@ -140,7 +142,7 @@ class TaskRepository(Protocol):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
     ) -> TaskCheckpoint | None: ...
 
     async def checkpoint(
@@ -149,7 +151,7 @@ class TaskRepository(Protocol):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
         sequence_no: int,
         checkpoint_type: str,
@@ -163,7 +165,7 @@ class TaskRepository(Protocol):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
     ) -> None: ...
 
@@ -173,7 +175,7 @@ class TaskRepository(Protocol):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
         reason: str,
     ) -> None: ...
@@ -184,7 +186,7 @@ class TaskRepository(Protocol):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
         reason: str,
         now: datetime,
@@ -197,7 +199,7 @@ class TaskStatusView:
     id: UUID
     case_id: UUID
     case_version: int
-    document_version_id: UUID
+    document_version_id: UUID | None
     status: TaskStatus
     attempt_count: int
     max_attempts: int
