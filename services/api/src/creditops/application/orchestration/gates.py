@@ -13,6 +13,20 @@ written by the engine from a handoff), G3 is derived here but WRITTEN only by
 the human-facing disposition API (``api/risk_review.py``) after it records a
 disposition — never by the Independent Risk Review Agent itself.  The checker
 processor never imports or calls this function.
+
+``derive_g2_status`` and ``derive_g4_status`` extend the same pattern for the
+Credit Operations Agent's two human-approval surfaces: G2 (document-request
+approval, mirrored from ``G2_GAP_REQUEST_APPROVAL``'s existing role gating
+INDEPENDENT_RISK_REVIEW readiness) and G4 (``G4_OPS_AUTHORIZATION``, action
+authorization).  Both are derived here but WRITTEN only by
+``api/credit_ops.py`` after it records a human approval/authorization record
+— never by the Credit Operations Agent's worker processor, which never
+imports or calls either function.  Writing G2 here does not change how
+INDEPENDENT_RISK_REVIEW's own readiness is evaluated (application/orchestration/
+readiness.py still reads whatever G2 status is stored for the case version,
+regardless of which human-facing endpoint wrote it); ``ensure_gate`` is an
+idempotent insert-if-absent-then-satisfy-only-if-OPEN write, so an additional
+writer for the same gate type is always safe.
 """
 
 from __future__ import annotations
@@ -129,3 +143,51 @@ def derive_g3_status(
             else GateStatus.OPEN
         )
     return GateStatus.SATISFIED if has_assessment_level_disposition else GateStatus.OPEN
+
+
+def derive_g2_status(
+    *,
+    package_exists: bool,
+    request_ids: Set[UUID],
+    approved_request_ids: Set[UUID],
+) -> GateStatus:
+    """Whether G2_GAP_REQUEST_APPROVAL MAY derive SATISFIED for the credit-ops
+    document-request batch attached to the latest package.
+
+    SATISFIED requires a credit-ops package to exist for the case version AND
+    every drafted document request in it to have its own human approval
+    record (``request_ids <= approved_request_ids``; vacuously true when
+    there are zero drafted requests -- there is nothing to approve).  No
+    credit-ops agent code calls this; only the human-facing approval
+    endpoint (``api/credit_ops.py``) does, after it records an approval.
+    """
+
+    if not package_exists:
+        return GateStatus.OPEN
+    return GateStatus.SATISFIED if request_ids <= approved_request_ids else GateStatus.OPEN
+
+
+def derive_g4_status(
+    *,
+    package_exists: bool,
+    action_ids: Set[UUID],
+    authorized_action_ids: Set[UUID],
+) -> GateStatus:
+    """Whether G4_OPS_AUTHORIZATION MAY derive SATISFIED for the proposed
+    actions in the latest credit-ops package.
+
+    Mirrors ``derive_g3_status``: SATISFIED requires a credit-ops package to
+    exist AND every proposed action to have its own human authorization
+    record (``action_ids <= authorized_action_ids``; vacuously true when
+    there are zero proposed actions).  The credit-ops worker's own output
+    can never satisfy this on its own -- every SATISFIED path requires at
+    least one row in ``ops_action_authorizations``, append-only and
+    human-authored, actor-and-role-captured
+    (supabase/migrations/202607180006_credit_ops.sql).  Authorization only
+    RECORDS authority; no code path anywhere in this codebase executes a
+    proposed action.
+    """
+
+    if not package_exists:
+        return GateStatus.OPEN
+    return GateStatus.SATISFIED if action_ids <= authorized_action_ids else GateStatus.OPEN

@@ -12,6 +12,7 @@ from starlette.types import ExceptionHandler
 
 from creditops.api.auth import JwtVerifier, RemoteJwksKeyResolver
 from creditops.api.cases import router as cases_router
+from creditops.api.credit_ops import router as credit_ops_router
 from creditops.api.errors import (
     ApiException,
     api_exception_handler,
@@ -27,6 +28,7 @@ from creditops.api.uploads import router as uploads_router
 from creditops.application.ports.storage import StoragePort
 from creditops.application.unit_of_work import UnitOfWorkFactory
 from creditops.config import Settings
+from creditops.infrastructure.postgres.credit_ops import PostgresCreditOpsRepository
 from creditops.infrastructure.postgres.legal import PostgresLegalRepository
 from creditops.infrastructure.postgres.orchestration import (
     PostgresOrchestrationRepository,
@@ -136,6 +138,11 @@ def create_app(
         if database_connection_factory is not None
         else None
     )
+    application.state.credit_ops_repository = (
+        PostgresCreditOpsRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
 
     @application.middleware("http")
     async def assign_correlation_id(
@@ -165,6 +172,7 @@ def create_app(
     application.include_router(underwriting_router)
     application.include_router(legal_router)
     application.include_router(risk_review_router)
+    application.include_router(credit_ops_router)
     return application
 
 
