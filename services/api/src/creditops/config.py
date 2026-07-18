@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     data_class: str = "synthetic"
     service_name: str = "creditops-api"
     log_level: str = "INFO"
+    #: Which queue a worker execution serves.  Deliberately unset by default:
+    #: a worker without an explicit mode refuses to run (fail closed).
+    worker_mode: Literal["document", "agent"] | None = None
     database_url: SecretStr | None = None
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
