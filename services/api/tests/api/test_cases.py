@@ -196,6 +196,7 @@ def test_missing_token_returns_flat_vietnamese_api_error(client: TestClient) -> 
         "messageVi": "Yêu cầu xác thực hợp lệ.",
         "correlationId": response.json()["correlationId"],
         "retryable": False,
+        "details": {},
     }
 
 
@@ -235,7 +236,7 @@ def test_invalid_signed_tokens_are_rejected_without_details(
 
     assert response.status_code == 401
     assert response.json()["code"] == "AUTHENTICATION_REQUIRED"
-    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable"}
+    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable", "details"}
 
 
 def test_token_without_subject_is_rejected(
@@ -367,7 +368,7 @@ def test_other_officer_cannot_distinguish_case_from_missing_case(
     assert forbidden.status_code == missing.status_code == 404
     assert forbidden.json()["code"] == missing.json()["code"] == "CASE_NOT_ACCESSIBLE"
     assert forbidden.json()["messageVi"] == missing.json()["messageVi"]
-    assert set(forbidden.json()) == {"code", "messageVi", "correlationId", "retryable"}
+    assert set(forbidden.json()) == {"code", "messageVi", "correlationId", "retryable", "details"}
 
 
 def test_non_intake_role_cannot_create_case(
@@ -398,4 +399,4 @@ def test_validation_error_uses_flat_vietnamese_contract(
 
     assert response.status_code == 422
     assert response.json()["code"] == "VALIDATION_ERROR"
-    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable"}
+    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable", "details"}
