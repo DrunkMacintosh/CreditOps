@@ -15,6 +15,10 @@ export type CaseSection =
   | "hop-dong"
   | "bao-dam"
   | "dieu-kien-giai-ngan"
+  | "giai-ngan"
+  | "giam-sat"
+  | "thu-no"
+  | "tat-toan-xu-ly-no"
   | "ban-giao"
   | "nhat-ky";
 
@@ -49,6 +53,15 @@ const CASE_NAV_GROUPS: readonly { label: string; tabs: readonly NavTab[] }[] = [
       { section: "hop-dong", label: "Hồ sơ hợp đồng" },
       { section: "bao-dam", label: "Hoàn thiện bảo đảm" },
       { section: "dieu-kien-giai-ngan", label: "Điều kiện giải ngân" },
+      { section: "giai-ngan", label: "Giải ngân vốn vay" },
+    ],
+  },
+  {
+    label: "Sau cấp tín dụng",
+    tabs: [
+      { section: "giam-sat", label: "Giám sát sau cấp tín dụng" },
+      { section: "thu-no", label: "Thu nợ gốc, lãi và phí" },
+      { section: "tat-toan-xu-ly-no", label: "Tất toán và xử lý nợ" },
     ],
   },
   {

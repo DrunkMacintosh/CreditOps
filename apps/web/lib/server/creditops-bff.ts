@@ -199,7 +199,34 @@ function validateAndReconstructSearch(
   if (isLimitOnlyListRoute(method, segments)) {
     return reconstructLimitOnlyQuery(parameters);
   }
+  if (isLedgerAsOfRoute(method, segments)) {
+    return reconstructAsOfQuery(parameters);
+  }
   return [...parameters.entries()].length === 0 ? "" : null;
+}
+
+// The repayment-ledger read (``GET .../repayments/{id}/ledger``) is the only
+// stage 11-14 route that accepts a query: a single optional ``asOf`` calendar
+// date. Same reconstruct-from-scratch discipline as the list routes — any other
+// parameter, a repeated ``asOf``, or a non-date fails closed.
+function isLedgerAsOfRoute(method: string, segments: string[]): boolean {
+  if (method !== "GET") return false;
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments\/[A-Za-z0-9_-]+\/ledger$/.test(
+    `/${segments.join("/")}`,
+  );
+}
+
+function reconstructAsOfQuery(parameters: URLSearchParams): string | null {
+  const entries = [...parameters.entries()];
+  if (entries.some(([name]) => name !== "asOf")) return null;
+  if (parameters.getAll("asOf").length > 1) return null;
+  const asOf = parameters.get("asOf");
+  if (asOf === null) return "";
+  const date = normalizedDate(asOf);
+  if (date === null) return null;
+  const canonical = new URLSearchParams();
+  canonical.set("asOf", date);
+  return `?${canonical.toString()}`;
 }
 
 function reconstructCursorLimitQuery(parameters: URLSearchParams): string | null {
@@ -472,6 +499,56 @@ function validateAndReconstructMutation(
   }
   if (isConditionTransition(segments)) {
     return canonicalizeTransitionCondition(value);
+  }
+
+  // Stage 11-14 post-credit surfaces. The disbursement gate writes (validate /
+  // authorize / execute), the settlement confirm and the recovery strategy
+  // approval all declare NO backend request model: they take an exactly-empty
+  // JSON body.
+  if (
+    isDisbursementValidate(segments) ||
+    isDisbursementAuthorize(segments) ||
+    isDisbursementExecute(segments) ||
+    isSettlementConfirm(segments) ||
+    isRecoveryApproveStrategy(segments)
+  ) {
+    return hasExactKeys(value, []) ? {} : null;
+  }
+  if (isDisbursementCreate(segments)) {
+    return canonicalizeCreateDisbursement(value);
+  }
+  if (isDisbursementReconcile(segments)) {
+    return canonicalizeReconcile(value);
+  }
+  if (isObligationsCreate(segments)) {
+    return canonicalizeCreateObligations(value);
+  }
+  if (isObservationCreate(segments)) {
+    return canonicalizeCreateObservation(value);
+  }
+  if (isCovenantCreate(segments)) {
+    return canonicalizeCreateCovenant(value);
+  }
+  if (isCovenantTest(segments)) {
+    return canonicalizeRunCovenantTest(value);
+  }
+  if (isAlertDisposition(segments)) {
+    return canonicalizeAlertDisposition(value);
+  }
+  if (isRepaymentCreate(segments)) {
+    return canonicalizeCreateFacility(value);
+  }
+  if (isRepaymentEvent(segments)) {
+    return canonicalizeRecordEvent(value);
+  }
+  if (isRepaymentNote(segments)) {
+    return canonicalizeCreateNote(value);
+  }
+  if (isSettlementCheck(segments)) {
+    return canonicalizeSettlementCheck(value);
+  }
+  if (isRecoveryOpen(segments)) {
+    return canonicalizeOpenRecovery(value);
   }
 
   return null;
@@ -1101,6 +1178,536 @@ function canonicalizeTransitionCondition(
   return canonical;
 }
 
+// --- Stage 11-14 post-credit route predicates + body reconstruction ---------
+//
+// Backend truth mirrored here (extra="forbid" on every request model):
+//   services/.../api/{disbursements,monitoring,repayments,settlement_recovery}.py.
+// Each body is rebuilt field-by-field so an undeclared key, a wrong type, a
+// smuggled document byte-stream, or a non-decimal amount fails closed before it
+// reaches upstream. Money crosses as an exact-decimal STRING (never a float);
+// integers are bounded to the backend's own range.
+
+const DECIMAL = /^-?\d+(\.\d+)?$/;
+const ISO_DATETIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/;
+const MAX_AMOUNT_LEN = 64;
+const MAX_SYNTHETIC_INT = 1_000_000;
+const MAX_RECOVERY_OPTIONS = 20;
+
+//: Closed PROPOSED synthetic taxonomies mirrored from the stage 11-14 domains.
+const RECONCILE_OUTCOMES = new Set(["CONFIRMED_EXECUTED", "CONFIRMED_NOT_EXECUTED"]);
+const OBLIGATION_FREQUENCIES = new Set(["MONTHLY", "QUARTERLY"]);
+const COMPARISON_OPERATORS = new Set(["GTE", "GT", "LTE", "LT", "EQ"]);
+const ALERT_DISPOSITION_TARGETS = new Set([
+  "ACKNOWLEDGED",
+  "ESCALATED",
+  "DISMISSED_BY_HUMAN",
+]);
+const REPAYMENT_STYLES = new Set(["EQUAL_PRINCIPAL", "BALLOON"]);
+const EVENT_KINDS = new Set(["PAYMENT", "REVERSAL"]);
+const COLLECTION_NOTE_KINDS = new Set(["OBSERVATION", "PROPOSED_ACTION"]);
+
+// An exact-decimal money string (optionally signed); the backend parses it as a
+// Decimal. Bounded by the backend's own max_length. NOT run through the base64
+// heuristic (a long integer would false-positive); the pattern is already exact.
+function normalizedDecimal(value: unknown, maxLen: number): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length < 1 || trimmed.length > maxLen || !DECIMAL.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+// A bounded integer forwarded verbatim (count, term, version, exception count).
+function boundedInt(value: unknown, minimum: number, maximum: number): number | null {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
+    return null;
+  }
+  return value;
+}
+
+// An ISO-8601 datetime naming a real instant; forwarded verbatim so no timezone
+// re-normalization ever shifts the caller's separated effective/observed stamps.
+function normalizedDateTime(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!ISO_DATETIME.test(trimmed) || Number.isNaN(new Date(trimmed).getTime())) {
+    return null;
+  }
+  return trimmed;
+}
+
+// A lower-cased UUID (two spellings can never disagree with the backend key).
+function normalizedUuid(value: unknown): string | null {
+  const candidate = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return UUID.test(candidate) ? candidate : null;
+}
+
+// -- disbursements (stage 11) --
+
+function isDisbursementCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements$/.test(
+    pathOf(segments),
+  );
+}
+
+function isDisbursementValidate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/validate$/.test(
+    pathOf(segments),
+  );
+}
+
+function isDisbursementAuthorize(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/authorize$/.test(
+    pathOf(segments),
+  );
+}
+
+function isDisbursementExecute(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/execute$/.test(
+    pathOf(segments),
+  );
+}
+
+function isDisbursementReconcile(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/reconcile$/.test(
+    pathOf(segments),
+  );
+}
+
+// Mirrors CreateDisbursementRequest: required {beneficiaryRef, accountRef};
+// optional exact-decimal {amount} (<=40) and {currency} (<=8).
+function canonicalizeCreateDisbursement(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set(["amount", "currency", "beneficiaryRef", "accountRef"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const beneficiaryRef = normalizedString(value.beneficiaryRef, 1, 400);
+  const accountRef = normalizedString(value.accountRef, 1, 400);
+  if (beneficiaryRef === null || looksLikeDocumentBytes(beneficiaryRef)) return null;
+  if (accountRef === null || looksLikeDocumentBytes(accountRef)) return null;
+  const canonical: Record<string, unknown> = { beneficiaryRef, accountRef };
+  if ("amount" in value) {
+    const amount = normalizedDecimal(value.amount, 40);
+    if (amount === null) return null;
+    canonical.amount = amount;
+  }
+  if ("currency" in value) {
+    const currency = normalizedString(value.currency, 1, 8);
+    if (currency === null || looksLikeDocumentBytes(currency)) return null;
+    canonical.currency = currency;
+  }
+  return canonical;
+}
+
+// Mirrors ReconcileRequest: {outcome ∈ reconciliation set, rationale}. Only the
+// two human-reconciliation outcomes are accepted (never an adapter result).
+function canonicalizeReconcile(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["outcome", "rationale"])) return null;
+  const outcome = normalizedString(value.outcome, 1, 64);
+  if (outcome === null || !RECONCILE_OUTCOMES.has(outcome)) return null;
+  const rationale = normalizedString(value.rationale, 1, 4000);
+  if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+  return { outcome, rationale };
+}
+
+// -- monitoring (stage 12) --
+
+function isObligationsCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/obligations$/.test(
+    pathOf(segments),
+  );
+}
+
+function isObservationCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/observations$/.test(
+    pathOf(segments),
+  );
+}
+
+function isCovenantCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/covenants$/.test(
+    pathOf(segments),
+  );
+}
+
+function isCovenantTest(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/covenants\/[A-Za-z0-9_-]+\/test$/.test(
+    pathOf(segments),
+  );
+}
+
+function isAlertDisposition(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/alerts\/[A-Za-z0-9_-]+\/disposition$/.test(
+    pathOf(segments),
+  );
+}
+
+// Mirrors CreateObligationsRequest: {frequency, requirementText, fromDate, count}.
+function canonicalizeCreateObligations(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["frequency", "requirementText", "fromDate", "count"])) {
+    return null;
+  }
+  const frequency = normalizedString(value.frequency, 1, 32);
+  if (frequency === null || !OBLIGATION_FREQUENCIES.has(frequency)) return null;
+  const requirementText = normalizedString(value.requirementText, 1, 4000);
+  if (requirementText === null || looksLikeDocumentBytes(requirementText)) return null;
+  const fromDate = normalizedDate(value.fromDate);
+  if (fromDate === null) return null;
+  const count = boundedInt(value.count, 1, 120);
+  if (count === null) return null;
+  return { frequency, requirementText, fromDate, count };
+}
+
+// Mirrors CreateObservationRequest: required {observationType, body, effectiveAt,
+// observedAt}; optional {obligationId (UUID), evidenceRefs}.
+function canonicalizeCreateObservation(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set([
+    "obligationId",
+    "observationType",
+    "body",
+    "effectiveAt",
+    "observedAt",
+    "evidenceRefs",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const observationType = normalizedString(value.observationType, 1, 200);
+  if (observationType === null || looksLikeDocumentBytes(observationType)) return null;
+  const body = normalizedString(value.body, 1, 8000);
+  if (body === null || looksLikeDocumentBytes(body)) return null;
+  const effectiveAt = normalizedDateTime(value.effectiveAt);
+  const observedAt = normalizedDateTime(value.observedAt);
+  if (effectiveAt === null || observedAt === null) return null;
+  const canonical: Record<string, unknown> = {
+    observationType,
+    body,
+    effectiveAt,
+    observedAt,
+  };
+  if ("obligationId" in value) {
+    const obligationId = normalizedUuid(value.obligationId);
+    if (obligationId === null) return null;
+    canonical.obligationId = obligationId;
+  }
+  if ("evidenceRefs" in value) {
+    const evidenceRefs = canonicalizeStringArray(
+      value.evidenceRefs,
+      MAX_EVIDENCE_REFS,
+      MAX_EVIDENCE_REF_LEN,
+    );
+    if (evidenceRefs === null) return null;
+    canonical.evidenceRefs = evidenceRefs;
+  }
+  return canonical;
+}
+
+// Mirrors CreateCovenantRequest: {name, metricKey, operator, thresholdValue,
+// thresholdVersion}.
+function canonicalizeCreateCovenant(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (
+    !hasExactKeys(value, [
+      "name",
+      "metricKey",
+      "operator",
+      "thresholdValue",
+      "thresholdVersion",
+    ])
+  ) {
+    return null;
+  }
+  const name = normalizedString(value.name, 1, 400);
+  if (name === null || looksLikeDocumentBytes(name)) return null;
+  const metricKey = normalizedString(value.metricKey, 1, 200);
+  if (metricKey === null || looksLikeDocumentBytes(metricKey)) return null;
+  const operator = normalizedString(value.operator, 1, 8);
+  if (operator === null || !COMPARISON_OPERATORS.has(operator)) return null;
+  const thresholdValue = normalizedDecimal(value.thresholdValue, MAX_AMOUNT_LEN);
+  if (thresholdValue === null) return null;
+  const thresholdVersion = boundedInt(value.thresholdVersion, 1, MAX_SYNTHETIC_INT);
+  if (thresholdVersion === null) return null;
+  return { name, metricKey, operator, thresholdValue, thresholdVersion };
+}
+
+// Mirrors RunCovenantTestRequest: {numerator, denominator?}.
+function canonicalizeRunCovenantTest(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (Object.keys(value).some((key) => key !== "numerator" && key !== "denominator")) {
+    return null;
+  }
+  if (!("numerator" in value)) return null;
+  const numerator = normalizedDecimal(value.numerator, MAX_AMOUNT_LEN);
+  if (numerator === null) return null;
+  const canonical: Record<string, unknown> = { numerator };
+  if ("denominator" in value) {
+    const denominator = normalizedDecimal(value.denominator, MAX_AMOUNT_LEN);
+    if (denominator === null) return null;
+    canonical.denominator = denominator;
+  }
+  return canonical;
+}
+
+// Mirrors DisposeAlertRequest: {toStatus ∈ disposition targets, rationale}. OPEN
+// is never a target (a deterministic rule alone creates it).
+function canonicalizeAlertDisposition(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["toStatus", "rationale"])) return null;
+  const toStatus = normalizedString(value.toStatus, 1, 64);
+  if (toStatus === null || !ALERT_DISPOSITION_TARGETS.has(toStatus)) return null;
+  const rationale = normalizedString(value.rationale, 1, 4000);
+  if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+  return { toStatus, rationale };
+}
+
+// -- repayments (stage 13) --
+
+function isRepaymentCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments$/.test(pathOf(segments));
+}
+
+function isRepaymentEvent(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments\/[A-Za-z0-9_-]+\/events$/.test(
+    pathOf(segments),
+  );
+}
+
+function isRepaymentNote(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments\/[A-Za-z0-9_-]+\/notes$/.test(
+    pathOf(segments),
+  );
+}
+
+// Mirrors CreateFacilityRequest.
+function canonicalizeCreateFacility(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set([
+    "principal",
+    "annualRatePercent",
+    "termMonths",
+    "repaymentStyle",
+    "firstPaymentDate",
+    "periodicFee",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const principal = normalizedDecimal(value.principal, MAX_AMOUNT_LEN);
+  const annualRatePercent = normalizedDecimal(value.annualRatePercent, MAX_AMOUNT_LEN);
+  if (principal === null || annualRatePercent === null) return null;
+  const termMonths = boundedInt(value.termMonths, 1, 600);
+  if (termMonths === null) return null;
+  const repaymentStyle = normalizedString(value.repaymentStyle, 1, 32);
+  if (repaymentStyle === null || !REPAYMENT_STYLES.has(repaymentStyle)) return null;
+  const firstPaymentDate = normalizedDate(value.firstPaymentDate);
+  if (firstPaymentDate === null) return null;
+  const canonical: Record<string, unknown> = {
+    principal,
+    annualRatePercent,
+    termMonths,
+    repaymentStyle,
+    firstPaymentDate,
+  };
+  if ("periodicFee" in value) {
+    const periodicFee = normalizedDecimal(value.periodicFee, MAX_AMOUNT_LEN);
+    if (periodicFee === null) return null;
+    canonical.periodicFee = periodicFee;
+  }
+  return canonical;
+}
+
+// Mirrors RecordEventRequest.
+function canonicalizeRecordEvent(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set([
+    "kind",
+    "amount",
+    "externalReference",
+    "effectiveDate",
+    "reversedEventId",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const kind = normalizedString(value.kind, 1, 32);
+  if (kind === null || !EVENT_KINDS.has(kind)) return null;
+  const amount = normalizedDecimal(value.amount, MAX_AMOUNT_LEN);
+  if (amount === null) return null;
+  const externalReference = normalizedString(value.externalReference, 1, 200);
+  if (externalReference === null || looksLikeDocumentBytes(externalReference)) return null;
+  const effectiveDate = normalizedDate(value.effectiveDate);
+  if (effectiveDate === null) return null;
+  const canonical: Record<string, unknown> = {
+    kind,
+    amount,
+    externalReference,
+    effectiveDate,
+  };
+  if ("reversedEventId" in value) {
+    const reversedEventId = normalizedUuid(value.reversedEventId);
+    if (reversedEventId === null) return null;
+    canonical.reversedEventId = reversedEventId;
+  }
+  return canonical;
+}
+
+// Mirrors CreateNoteRequest.
+function canonicalizeCreateNote(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set(["noteKind", "noteText", "proposedAction"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const noteKind = normalizedString(value.noteKind, 1, 32);
+  if (noteKind === null || !COLLECTION_NOTE_KINDS.has(noteKind)) return null;
+  const noteText = normalizedString(value.noteText, 1, 4000);
+  if (noteText === null || looksLikeDocumentBytes(noteText)) return null;
+  const canonical: Record<string, unknown> = { noteKind, noteText };
+  if ("proposedAction" in value) {
+    const proposedAction = normalizedString(value.proposedAction, 1, 400);
+    if (proposedAction === null || looksLikeDocumentBytes(proposedAction)) return null;
+    canonical.proposedAction = proposedAction;
+  }
+  return canonical;
+}
+
+// -- settlement + recovery (stage 14) --
+
+function isSettlementCheck(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/settlement\/check$/.test(pathOf(segments));
+}
+
+function isSettlementConfirm(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/settlement\/confirm$/.test(pathOf(segments));
+}
+
+function isRecoveryOpen(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/recovery$/.test(pathOf(segments));
+}
+
+function isRecoveryApproveStrategy(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/recovery\/[A-Za-z0-9_-]+\/approve-strategy$/.test(
+    pathOf(segments),
+  );
+}
+
+// Mirrors SettlementCheckRequest.
+function canonicalizeSettlementCheck(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (
+    !hasExactKeys(value, [
+      "outstandingPrincipal",
+      "outstandingInterest",
+      "outstandingFees",
+      "openExceptionCount",
+    ])
+  ) {
+    return null;
+  }
+  const outstandingPrincipal = normalizedDecimal(value.outstandingPrincipal, MAX_AMOUNT_LEN);
+  const outstandingInterest = normalizedDecimal(value.outstandingInterest, MAX_AMOUNT_LEN);
+  const outstandingFees = normalizedDecimal(value.outstandingFees, MAX_AMOUNT_LEN);
+  if (
+    outstandingPrincipal === null ||
+    outstandingInterest === null ||
+    outstandingFees === null
+  ) {
+    return null;
+  }
+  const openExceptionCount = boundedInt(value.openExceptionCount, 0, MAX_SYNTHETIC_INT);
+  if (openExceptionCount === null) return null;
+  return {
+    outstandingPrincipal,
+    outstandingInterest,
+    outstandingFees,
+    openExceptionCount,
+  };
+}
+
+// Mirrors OpenRecoveryRequest, including its nested options (>=1).
+function canonicalizeOpenRecovery(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (
+    !hasExactKeys(value, [
+      "outstandingTotal",
+      "periodsInShortfall",
+      "triggerSummary",
+      "escalationRationale",
+      "evidenceRefs",
+      "options",
+    ])
+  ) {
+    return null;
+  }
+  const outstandingTotal = normalizedDecimal(value.outstandingTotal, MAX_AMOUNT_LEN);
+  if (outstandingTotal === null) return null;
+  const periodsInShortfall = boundedInt(value.periodsInShortfall, 0, MAX_SYNTHETIC_INT);
+  if (periodsInShortfall === null) return null;
+  const triggerSummary = normalizedString(value.triggerSummary, 1, 4000);
+  if (triggerSummary === null || looksLikeDocumentBytes(triggerSummary)) return null;
+  const escalationRationale = normalizedString(value.escalationRationale, 1, 4000);
+  if (escalationRationale === null || looksLikeDocumentBytes(escalationRationale)) return null;
+  const evidenceRefs = canonicalizeStringArray(
+    value.evidenceRefs,
+    MAX_EVIDENCE_REFS,
+    MAX_EVIDENCE_REF_LEN,
+  );
+  if (evidenceRefs === null || evidenceRefs.length < 1) return null;
+  const options = canonicalizeRecoveryOptions(value.options);
+  if (options === null) return null;
+  return {
+    outstandingTotal,
+    periodsInShortfall,
+    triggerSummary,
+    escalationRationale,
+    evidenceRefs,
+    options,
+  };
+}
+
+// Mirrors the RecoveryOptionRequest tuple (>=1): required {label, description,
+// consequences}; optional {dependencies}. Rebuilt option-by-option.
+function canonicalizeRecoveryOptions(
+  value: unknown,
+): Record<string, unknown>[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_RECOVERY_OPTIONS) {
+    return null;
+  }
+  const result: Record<string, unknown>[] = [];
+  for (const entry of value) {
+    if (!isPlainRecord(entry)) return null;
+    const allowed = new Set(["label", "description", "consequences", "dependencies"]);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const label = normalizedString(entry.label, 1, 400);
+    const description = normalizedString(entry.description, 1, 4000);
+    const consequences = normalizedString(entry.consequences, 1, 4000);
+    if (label === null || looksLikeDocumentBytes(label)) return null;
+    if (description === null || looksLikeDocumentBytes(description)) return null;
+    if (consequences === null || looksLikeDocumentBytes(consequences)) return null;
+    const option: Record<string, unknown> = { label, description, consequences };
+    if ("dependencies" in entry) {
+      const dependencies = normalizedString(entry.dependencies, 1, 4000);
+      if (dependencies === null || looksLikeDocumentBytes(dependencies)) return null;
+      option.dependencies = dependencies;
+    }
+    result.push(option);
+  }
+  return result;
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
@@ -1249,6 +1856,75 @@ function allowlisted(method: string, segments: string[]): boolean {
       /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions\/confirm$/.test(path)) ||
     (method === "POST" &&
       /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions\/[A-Za-z0-9_-]+\/transition$/.test(
+        path,
+      )) ||
+    // Stage 11 — proposed disbursement: list, create, the two human gates,
+    // labelled-mock execute, and human reconciliation.
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/validate$/.test(
+        path,
+      )) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/authorize$/.test(
+        path,
+      )) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/execute$/.test(
+        path,
+      )) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/proposed-disbursements\/[A-Za-z0-9_-]+\/reconcile$/.test(
+        path,
+      )) ||
+    // Stage 12 — post-credit monitoring: obligations, observations, covenants +
+    // their tests, and the human alert disposition.
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/obligations$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/obligations$/.test(path)) ||
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/observations$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/observations$/.test(path)) ||
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/covenants$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/covenants$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/covenants\/[A-Za-z0-9_-]+\/test$/.test(
+        path,
+      )) ||
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/covenant-tests$/.test(path)) ||
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/alerts$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/monitoring\/alerts\/[A-Za-z0-9_-]+\/disposition$/.test(
+        path,
+      )) ||
+    // Stage 13 — repayment ledger: open facility, append event, recomputed
+    // ledger read (optional asOf), and a human collection note.
+    (method === "POST" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments\/[A-Za-z0-9_-]+\/events$/.test(path)) ||
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments\/[A-Za-z0-9_-]+\/ledger$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/repayments\/[A-Za-z0-9_-]+\/notes$/.test(path)) ||
+    // Stage 14 — settlement (14A) + recovery preparation (14B).
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/settlement\/check$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/settlement\/confirm$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/settlement$/.test(path)) ||
+    (method === "POST" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/recovery$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/recovery$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/recovery\/[A-Za-z0-9_-]+\/approve-strategy$/.test(
         path,
       )) ||
     (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/handoffs$/.test(path)) ||

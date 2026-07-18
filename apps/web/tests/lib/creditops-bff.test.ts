@@ -1537,3 +1537,589 @@ describe("CreditOps stage-10 condition routes", () => {
     expect(rejected.status).toBe(422);
   });
 });
+
+// --- Stage 11-14 post-credit surfaces ----------------------------------------
+
+const DISB_UUID_UPPER = "AAAAAAAA-1111-4111-8111-111111111111";
+const DISB_UUID_LOWER = "aaaaaaaa-1111-4111-8111-111111111111";
+
+describe("CreditOps stage-11 proposed-disbursement routes", () => {
+  it("forwards the proposed-disbursements GET and rejects a query on it", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ actions: [] }, { status: 200 }));
+    const ok = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/proposed-disbursements"),
+      seg("/api/v1/cases/case-1/proposed-disbursements"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+
+    const rejected = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/proposed-disbursements?cursor=x"),
+      seg("/api/v1/cases/case-1/proposed-disbursements"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(400);
+  });
+
+  it("reconstructs a create-disbursement body with an optional exact-decimal amount", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/proposed-disbursements", {
+        beneficiaryRef: "  Cty ABC  ",
+        accountRef: "  STK 0011  ",
+        amount: "5000000000.00",
+        currency: "VND",
+      }),
+      seg("/api/v1/cases/case-1/proposed-disbursements"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        beneficiaryRef: "Cty ABC",
+        accountRef: "STK 0011",
+        amount: "5000000000.00",
+        currency: "VND",
+      }),
+    );
+  });
+
+  it.each([
+    { name: "missing accountRef", body: { beneficiaryRef: "x" } },
+    { name: "non-decimal amount", body: { beneficiaryRef: "x", accountRef: "y", amount: "1,5" } },
+    { name: "extra key", body: { beneficiaryRef: "x", accountRef: "y", note: "z" } },
+  ])("rejects an invalid create-disbursement body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/proposed-disbursements", body),
+      seg("/api/v1/cases/case-1/proposed-disbursements"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(["validate", "authorize", "execute"])(
+    "forwards the %s gate write with an exactly-empty body and rejects a non-empty one",
+    async (verb) => {
+      const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+      const path = `/api/v1/cases/case-1/proposed-disbursements/action-1/${verb}`;
+      const ok = await proxyCreditOpsRequest(stageMutation(path, {}), seg(path), {
+        fetcher,
+        upstreamBaseUrl,
+      });
+      expect(ok.status).toBe(200);
+      expect(fetcher.mock.calls[0][1].body).toBe("{}");
+
+      const rejected = await proxyCreditOpsRequest(
+        stageMutation(path, { force: true }),
+        seg(path),
+        { fetcher, upstreamBaseUrl },
+      );
+      expect(rejected.status).toBe(422);
+    },
+  );
+
+  it("reconstructs a reconcile body and rejects an out-of-set outcome", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const path = "/api/v1/cases/case-1/proposed-disbursements/action-1/reconcile";
+    const ok = await proxyCreditOpsRequest(
+      stageMutation(path, { outcome: "CONFIRMED_NOT_EXECUTED", rationale: " Tiền chưa chuyển. " }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({ outcome: "CONFIRMED_NOT_EXECUTED", rationale: "Tiền chưa chuyển." }),
+    );
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation(path, { outcome: "EXECUTION_UNKNOWN", rationale: "x" }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+});
+
+describe("CreditOps stage-12 monitoring routes", () => {
+  it("forwards the obligations GET and reconstructs a create-obligations body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ obligations: [] }, { status: 200 }));
+    const get = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/monitoring/obligations"),
+      seg("/api/v1/cases/case-1/monitoring/obligations"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(get.status).toBe(200);
+
+    const create = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/monitoring/obligations", {
+        frequency: "MONTHLY",
+        requirementText: "  Nộp BCTC hằng tháng  ",
+        fromDate: "2026-08-01",
+        count: 6,
+      }),
+      seg("/api/v1/cases/case-1/monitoring/obligations"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(create.status).toBe(200);
+    expect(fetcher.mock.calls[1][1].body).toBe(
+      JSON.stringify({
+        frequency: "MONTHLY",
+        requirementText: "Nộp BCTC hằng tháng",
+        fromDate: "2026-08-01",
+        count: 6,
+      }),
+    );
+  });
+
+  it.each([
+    { name: "unknown frequency", body: { frequency: "WEEKLY", requirementText: "x", fromDate: "2026-08-01", count: 1 } },
+    { name: "count above bound", body: { frequency: "MONTHLY", requirementText: "x", fromDate: "2026-08-01", count: 121 } },
+    { name: "impossible date", body: { frequency: "MONTHLY", requirementText: "x", fromDate: "2026-13-40", count: 1 } },
+  ])("rejects an invalid create-obligations body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/monitoring/obligations", body),
+      seg("/api/v1/cases/case-1/monitoring/obligations"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs an observation with separated timestamps and a lower-cased obligation id", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/monitoring/observations", {
+        observationType: "  Kiểm tra thực địa  ",
+        body: "  Vận hành bình thường.  ",
+        effectiveAt: "2026-07-01T00:00:00Z",
+        observedAt: "2026-07-10T00:00:00Z",
+        obligationId: DISB_UUID_UPPER,
+        evidenceRefs: [" ref-1 "],
+      }),
+      seg("/api/v1/cases/case-1/monitoring/observations"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        observationType: "Kiểm tra thực địa",
+        body: "Vận hành bình thường.",
+        effectiveAt: "2026-07-01T00:00:00Z",
+        observedAt: "2026-07-10T00:00:00Z",
+        obligationId: DISB_UUID_LOWER,
+        evidenceRefs: ["ref-1"],
+      }),
+    );
+  });
+
+  it("rejects an observation with a non-datetime effectiveAt", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/monitoring/observations", {
+        observationType: "x",
+        body: "y",
+        effectiveAt: "2026-07-01",
+        observedAt: "2026-07-10T00:00:00Z",
+      }),
+      seg("/api/v1/cases/case-1/monitoring/observations"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs a covenant with an exact-decimal threshold and rejects an unknown operator", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const ok = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/monitoring/covenants", {
+        name: "  Hệ số thanh toán  ",
+        metricKey: "current_ratio",
+        operator: "GTE",
+        thresholdValue: "1.2",
+        thresholdVersion: 1,
+      }),
+      seg("/api/v1/cases/case-1/monitoring/covenants"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        name: "Hệ số thanh toán",
+        metricKey: "current_ratio",
+        operator: "GTE",
+        thresholdValue: "1.2",
+        thresholdVersion: 1,
+      }),
+    );
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/monitoring/covenants", {
+        name: "x",
+        metricKey: "y",
+        operator: "BETWEEN",
+        thresholdValue: "1.2",
+        thresholdVersion: 1,
+      }),
+      seg("/api/v1/cases/case-1/monitoring/covenants"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+
+  it("reconstructs a covenant test body with an optional denominator", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const path = "/api/v1/cases/case-1/monitoring/covenants/cov-1/test";
+    const response = await proxyCreditOpsRequest(
+      stageMutation(path, { numerator: "1.5", denominator: "1.0" }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({ numerator: "1.5", denominator: "1.0" }),
+    );
+  });
+
+  it("forwards covenant-tests + alerts GETs and reconstructs an alert disposition", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const tests = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/monitoring/covenant-tests"),
+      seg("/api/v1/cases/case-1/monitoring/covenant-tests"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(tests.status).toBe(200);
+
+    const alerts = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/monitoring/alerts"),
+      seg("/api/v1/cases/case-1/monitoring/alerts"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(alerts.status).toBe(200);
+
+    const path = "/api/v1/cases/case-1/monitoring/alerts/alert-1/disposition";
+    const ok = await proxyCreditOpsRequest(
+      stageMutation(path, { toStatus: "ACKNOWLEDGED", rationale: " Đã tiếp nhận. " }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+    expect(fetcher.mock.calls[2][1].body).toBe(
+      JSON.stringify({ toStatus: "ACKNOWLEDGED", rationale: "Đã tiếp nhận." }),
+    );
+
+    // OPEN is never a disposition TARGET (a deterministic rule alone creates it).
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation(path, { toStatus: "OPEN", rationale: "x" }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+});
+
+describe("CreditOps stage-13 repayment routes", () => {
+  it("reconstructs a create-facility body and rejects an unknown repayment style", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const ok = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/repayments", {
+        principal: "1000000000",
+        annualRatePercent: "9.5",
+        termMonths: 12,
+        repaymentStyle: "EQUAL_PRINCIPAL",
+        firstPaymentDate: "2026-09-01",
+        periodicFee: "50000",
+      }),
+      seg("/api/v1/cases/case-1/repayments"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        principal: "1000000000",
+        annualRatePercent: "9.5",
+        termMonths: 12,
+        repaymentStyle: "EQUAL_PRINCIPAL",
+        firstPaymentDate: "2026-09-01",
+        periodicFee: "50000",
+      }),
+    );
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/repayments", {
+        principal: "1000000000",
+        annualRatePercent: "9.5",
+        termMonths: 12,
+        repaymentStyle: "ANNUITY",
+        firstPaymentDate: "2026-09-01",
+      }),
+      seg("/api/v1/cases/case-1/repayments"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+
+  it("reconstructs a repayment event body and rejects an unknown kind", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const path = "/api/v1/cases/case-1/repayments/fac-1/events";
+    const ok = await proxyCreditOpsRequest(
+      stageMutation(path, {
+        kind: "PAYMENT",
+        amount: "1000000",
+        externalReference: " REF-001 ",
+        effectiveDate: "2026-09-01",
+      }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        kind: "PAYMENT",
+        amount: "1000000",
+        externalReference: "REF-001",
+        effectiveDate: "2026-09-01",
+      }),
+    );
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation(path, {
+        kind: "REFUND",
+        amount: "1000000",
+        externalReference: "REF-002",
+        effectiveDate: "2026-09-01",
+      }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+
+  it("forwards the ledger GET and reconstructs the optional asOf date query", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ periods: [] }, { status: 200 }));
+    const noQuery = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/repayments/fac-1/ledger"),
+      ["api", "v1", "cases", "case-1", "repayments", "fac-1", "ledger"],
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(noQuery.status).toBe(200);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      "https://creditops-api.invalid/api/v1/cases/case-1/repayments/fac-1/ledger",
+    );
+
+    const withDate = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/repayments/fac-1/ledger?asOf=2026-09-30"),
+      ["api", "v1", "cases", "case-1", "repayments", "fac-1", "ledger"],
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(withDate.status).toBe(200);
+    expect(fetcher.mock.calls[1][0]).toBe(
+      "https://creditops-api.invalid/api/v1/cases/case-1/repayments/fac-1/ledger?asOf=2026-09-30",
+    );
+  });
+
+  it.each([
+    "/api/v1/cases/case-1/repayments/fac-1/ledger?asOf=2026-13-40",
+    "/api/v1/cases/case-1/repayments/fac-1/ledger?foo=bar",
+  ])("rejects an invalid ledger query: %s", async (path) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      request(path),
+      ["api", "v1", "cases", "case-1", "repayments", "fac-1", "ledger"],
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs a collection note and rejects an unknown note kind", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const path = "/api/v1/cases/case-1/repayments/fac-1/notes";
+    const ok = await proxyCreditOpsRequest(
+      stageMutation(path, {
+        noteKind: "PROPOSED_ACTION",
+        noteText: " Đề nghị nhắc nợ. ",
+        proposedAction: " Gọi điện nhắc nợ. ",
+      }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        noteKind: "PROPOSED_ACTION",
+        noteText: "Đề nghị nhắc nợ.",
+        proposedAction: "Gọi điện nhắc nợ.",
+      }),
+    );
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation(path, { noteKind: "REMINDER", noteText: "x" }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+});
+
+describe("CreditOps stage-14 settlement/recovery routes", () => {
+  it("reconstructs a settlement check body and forwards the empty-body confirm + GET", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const check = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/settlement/check", {
+        outstandingPrincipal: "0",
+        outstandingInterest: "0",
+        outstandingFees: "0",
+        openExceptionCount: 0,
+      }),
+      seg("/api/v1/cases/case-1/settlement/check"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(check.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        outstandingPrincipal: "0",
+        outstandingInterest: "0",
+        outstandingFees: "0",
+        openExceptionCount: 0,
+      }),
+    );
+
+    const confirm = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/settlement/confirm", {}),
+      seg("/api/v1/cases/case-1/settlement/confirm"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(confirm.status).toBe(201);
+    expect(fetcher.mock.calls[1][1].body).toBe("{}");
+
+    const get = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/settlement"),
+      seg("/api/v1/cases/case-1/settlement"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(get.status).toBe(201);
+  });
+
+  it("rejects a settlement confirm carrying a body", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/settlement/confirm", { force: true }),
+      seg("/api/v1/cases/case-1/settlement/confirm"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs an open-recovery body with its nested options", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/recovery", {
+        outstandingTotal: "500000000",
+        periodsInShortfall: 3,
+        triggerSummary: " Shortfall kéo dài. ",
+        escalationRationale: " Đề nghị mở hồ sơ xử lý nợ. ",
+        evidenceRefs: [" ref-1 "],
+        options: [
+          {
+            label: " Cơ cấu lại nợ ",
+            description: " Giãn kỳ hạn trả nợ. ",
+            consequences: " Kéo dài thời gian thu hồi. ",
+          },
+        ],
+      }),
+      seg("/api/v1/cases/case-1/recovery"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        outstandingTotal: "500000000",
+        periodsInShortfall: 3,
+        triggerSummary: "Shortfall kéo dài.",
+        escalationRationale: "Đề nghị mở hồ sơ xử lý nợ.",
+        evidenceRefs: ["ref-1"],
+        options: [
+          {
+            label: "Cơ cấu lại nợ",
+            description: "Giãn kỳ hạn trả nợ.",
+            consequences: "Kéo dài thời gian thu hồi.",
+          },
+        ],
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "empty options",
+      body: {
+        outstandingTotal: "1",
+        periodsInShortfall: 3,
+        triggerSummary: "x",
+        escalationRationale: "y",
+        evidenceRefs: ["r"],
+        options: [],
+      },
+    },
+    {
+      name: "empty evidence refs",
+      body: {
+        outstandingTotal: "1",
+        periodsInShortfall: 3,
+        triggerSummary: "x",
+        escalationRationale: "y",
+        evidenceRefs: [],
+        options: [{ label: "a", description: "b", consequences: "c" }],
+      },
+    },
+    {
+      name: "option missing consequences",
+      body: {
+        outstandingTotal: "1",
+        periodsInShortfall: 3,
+        triggerSummary: "x",
+        escalationRationale: "y",
+        evidenceRefs: ["r"],
+        options: [{ label: "a", description: "b" }],
+      },
+    },
+  ])("rejects an invalid open-recovery body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/recovery", body),
+      seg("/api/v1/cases/case-1/recovery"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("forwards the recovery GET and the empty-body approve-strategy", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const get = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/recovery"),
+      seg("/api/v1/cases/case-1/recovery"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(get.status).toBe(200);
+
+    const path = "/api/v1/cases/case-1/recovery/rec-1/approve-strategy";
+    const ok = await proxyCreditOpsRequest(stageMutation(path, {}), seg(path), {
+      fetcher,
+      upstreamBaseUrl,
+    });
+    expect(ok.status).toBe(200);
+    expect(fetcher.mock.calls[1][1].body).toBe("{}");
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation(path, { note: "x" }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+});
