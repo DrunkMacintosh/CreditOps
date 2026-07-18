@@ -28,6 +28,8 @@ from creditops.api.uploads import router as uploads_router
 from creditops.application.ports.storage import StoragePort
 from creditops.application.unit_of_work import UnitOfWorkFactory
 from creditops.config import Settings
+from creditops.infrastructure.gcp.cloud_run_dispatcher import CloudRunDispatcher
+from creditops.infrastructure.gcp.metadata_token import MetadataTokenProvider
 from creditops.infrastructure.postgres.credit_ops import PostgresCreditOpsRepository
 from creditops.infrastructure.postgres.legal import PostgresLegalRepository
 from creditops.infrastructure.postgres.orchestration import (
@@ -141,6 +143,22 @@ def create_app(
     application.state.credit_ops_repository = (
         PostgresCreditOpsRepository(database_connection_factory)
         if database_connection_factory is not None
+        else None
+    )
+    application.state.worker_dispatcher = (
+        CloudRunDispatcher(
+            project_id=cast(str, configured.gcp_project_id),
+            location=cast(str, configured.gcp_location),
+            job_name=cast(str, configured.gcp_worker_job_name),
+            token_provider=MetadataTokenProvider(),
+        )
+        if all(
+            (
+                configured.gcp_project_id,
+                configured.gcp_location,
+                configured.gcp_worker_job_name,
+            )
+        )
         else None
     )
 

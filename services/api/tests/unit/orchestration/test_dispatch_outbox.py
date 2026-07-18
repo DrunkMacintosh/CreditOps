@@ -92,6 +92,73 @@ async def test_duplicate_kickoff_creates_no_second_outbox_event() -> None:
     assert len(repository.outbox) == 1
 
 
+class RecordingDispatcher:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls = 0
+        self._fail = fail
+
+    async def request_execution(self):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self._fail:
+            from creditops.application.ports.worker_dispatcher import (
+                WorkerDispatchError,
+            )
+
+            raise WorkerDispatchError("dispatch unavailable")
+        from creditops.application.ports.worker_dispatcher import WorkerDispatchResult
+
+        return WorkerDispatchResult(accepted=True, execution_name="exec-1")
+
+
+@pytest.mark.asyncio
+async def test_successful_sends_request_one_worker_execution() -> None:
+    # Queue publish alone does not run anything on Cloud Run: after at least
+    # one successful send, the dispatcher asks for ONE stateless worker
+    # execution (the recovery sweep covers the rest).
+    repository = FakeOrchestrationRepository()
+    queue = RecordingQueue()
+    dispatcher = RecordingDispatcher()
+    await KickoffOrchestration(repository).execute(CASE_ID)
+
+    result = await DispatchOutbox(
+        repository, queue, worker_dispatcher=dispatcher
+    ).run()
+
+    assert result.dispatched == 1
+    assert dispatcher.calls == 1
+    assert result.worker_dispatch_requested is True
+
+
+@pytest.mark.asyncio
+async def test_no_sends_means_no_worker_execution_request() -> None:
+    repository = FakeOrchestrationRepository()
+    dispatcher = RecordingDispatcher()
+
+    result = await DispatchOutbox(
+        repository, RecordingQueue(), worker_dispatcher=dispatcher
+    ).run()
+
+    assert result.dispatched == 0
+    assert dispatcher.calls == 0
+    assert result.worker_dispatch_requested is False
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_failure_never_undoes_the_durable_sends() -> None:
+    repository = FakeOrchestrationRepository()
+    queue = RecordingQueue()
+    dispatcher = RecordingDispatcher(fail=True)
+    await KickoffOrchestration(repository).execute(CASE_ID)
+
+    result = await DispatchOutbox(
+        repository, queue, worker_dispatcher=dispatcher
+    ).run()
+
+    assert result.dispatched == 1
+    assert len(queue.sent) == 1
+    assert result.worker_dispatch_requested is False
+
+
 @pytest.mark.asyncio
 async def test_dispatch_ignores_foreign_payloads_fail_closed() -> None:
     # An outbox row whose payload does not validate as a task envelope is

@@ -168,7 +168,11 @@ async def advance_orchestration(
     # Best-effort publish of committed outbox events.  The task row and its
     # TASK_READY event are already durable; a failed send here is retried by
     # the next dispatch run, so the 202 below stays truthful either way.
-    dispatched = await DispatchOutbox(repository, _queue(request)).run()
+    dispatched = await DispatchOutbox(
+        repository,
+        _queue(request),
+        worker_dispatcher=getattr(request.app.state, "worker_dispatcher", None),
+    ).run()
     log_event(
         logging.getLogger(__name__),
         logging.INFO,

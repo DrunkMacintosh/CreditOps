@@ -421,7 +421,13 @@ async def _retick_orchestration(
         )
         queue = getattr(request.app.state, "agent_task_queue", None)
         if queue is not None:
-            await DispatchOutbox(orchestration_repository, queue).run()
+            await DispatchOutbox(
+                orchestration_repository,
+                queue,
+                worker_dispatcher=getattr(
+                    request.app.state, "worker_dispatcher", None
+                ),
+            ).run()
         log_event(
             logging.getLogger(__name__),
             logging.INFO,

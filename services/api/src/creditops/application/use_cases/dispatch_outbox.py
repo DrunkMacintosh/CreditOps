@@ -21,6 +21,10 @@ from pydantic import ValidationError
 
 from creditops.application.ports.orchestration import OrchestrationRepository
 from creditops.application.ports.queue import QueueError, QueuePort
+from creditops.application.ports.worker_dispatcher import (
+    WorkerDispatcher,
+    WorkerDispatchError,
+)
 from creditops.domain.tasks import TaskEnvelopeV1
 
 #: Outbox event types this dispatcher understands.  Anything else fails
@@ -32,6 +36,10 @@ TASK_READY_EVENT = "TASK_READY"
 class DispatchResult:
     dispatched: int
     failed: int
+    #: Whether one Cloud Run worker execution was successfully requested
+    #: after the sends.  A request failure never undoes the durable sends —
+    #: the Cloud Scheduler recovery sweep covers delivery.
+    worker_dispatch_requested: bool = False
 
 
 class DispatchOutbox:
@@ -41,10 +49,12 @@ class DispatchOutbox:
         queue: QueuePort,
         *,
         batch_limit: int = 32,
+        worker_dispatcher: WorkerDispatcher | None = None,
     ) -> None:
         self._repository = repository
         self._queue = queue
         self._batch_limit = batch_limit
+        self._worker_dispatcher = worker_dispatcher
 
     async def run(self) -> DispatchResult:
         events = await self._repository.load_undispatched_outbox(limit=self._batch_limit)
@@ -69,4 +79,18 @@ class DispatchOutbox:
                 continue
             await self._repository.mark_outbox_dispatched(event.event_id)
             dispatched += 1
-        return DispatchResult(dispatched=dispatched, failed=failed)
+        worker_requested = False
+        if dispatched > 0 and self._worker_dispatcher is not None:
+            try:
+                outcome = await self._worker_dispatcher.request_execution()
+                worker_requested = outcome.accepted
+            except WorkerDispatchError:
+                # The sends are durable and the messages are queued; the
+                # scheduled recovery sweep will run them.  Never retried
+                # blindly here.
+                worker_requested = False
+        return DispatchResult(
+            dispatched=dispatched,
+            failed=failed,
+            worker_dispatch_requested=worker_requested,
+        )

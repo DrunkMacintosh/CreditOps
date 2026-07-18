@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_service_role_key: SecretStr | None = None
     supabase_storage_tus_url: str | None = None
+    #: Cloud Run worker Job coordinates.  All three must be present before a
+    #: dispatcher is composed; otherwise dispatch stays disabled and the
+    #: scheduled recovery sweep is the only trigger (fail closed).
+    gcp_project_id: str | None = None
+    gcp_location: str | None = None
+    gcp_worker_job_name: str | None = None
     supabase_storage_max_upload_bytes: int = 100 * 1024 * 1024
     supabase_storage_intent_ttl_seconds: int = 900
 
