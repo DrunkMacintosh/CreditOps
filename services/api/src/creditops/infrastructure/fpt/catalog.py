@@ -65,24 +65,63 @@ class FPTCatalog(BaseModel):
         return config
 
     @classmethod
-    def from_environment(cls) -> FPTCatalog:
-        """Load only explicitly configured capabilities; never guesses IDs."""
+    def from_configuration(
+        cls,
+        *,
+        model_catalog: Mapping[CapabilityName, str] | None = None,
+        environ: Mapping[str, str] | None = None,
+    ) -> FPTCatalog:
+        """Combine the committed model catalog with runtime endpoint/key config.
 
-        api_key = os.environ.get("FPT_API_KEY", "")
+        The ``model_id`` for each capability is the committed authority (from
+        ``model_catalog``); the tenant ``endpoint_url``/``endpoint_id`` and the
+        ``api_key`` are injected from the environment. A capability activates
+        only when its model is pinned in code AND its endpoint plus the API key
+        are present. Every other case fails closed:
+
+        - an endpoint configured for a capability with no pinned model is
+          rejected (the model is the committed authority, never the env);
+        - an environment ``FPT_{CAP}_MODEL_ID`` that disagrees with the pinned
+          model is rejected (the env cannot override or silently drift the
+          model);
+        - a pinned model missing its endpoint or the API key is incomplete.
+        """
+
+        if model_catalog is None:
+            # Imported lazily to avoid a module import cycle.
+            from creditops.infrastructure.fpt.model_catalog import FPT_MODEL_CATALOG
+
+            model_catalog = FPT_MODEL_CATALOG
+        env = os.environ if environ is None else environ
+        api_key = env.get("FPT_API_KEY", "")
         capabilities: dict[CapabilityName, FPTCapabilityConfig] = {}
         for capability in ("reasoning", "kie", "table", "vision", "embedding"):
             prefix = f"FPT_{capability.upper()}"
-            endpoint = os.environ.get(f"{prefix}_ENDPOINT_URL")
-            endpoint_id = os.environ.get(f"{prefix}_ENDPOINT_ID")
-            model_id = os.environ.get(f"{prefix}_MODEL_ID")
-            if not endpoint and not endpoint_id and not model_id:
+            endpoint = env.get(f"{prefix}_ENDPOINT_URL")
+            endpoint_id = env.get(f"{prefix}_ENDPOINT_ID")
+            env_model = env.get(f"{prefix}_MODEL_ID")
+            pinned_model = model_catalog.get(capability)
+
+            if pinned_model is None:
+                if endpoint or endpoint_id or env_model:
+                    raise ValueError(
+                        f"FPT {capability} endpoint is configured but no model is "
+                        "pinned in code"
+                    )
                 continue
-            if not endpoint or not endpoint_id or not model_id or not api_key:
+
+            if env_model is not None and env_model.strip() and env_model.strip() != pinned_model:
+                raise ValueError(
+                    f"FPT {capability} model id is pinned in code; the environment "
+                    "cannot override it"
+                )
+            if not endpoint or not endpoint_id or not api_key:
                 raise ValueError(f"incomplete FPT {capability} configuration")
+
             capabilities[capability] = FPTCapabilityConfig(
                 capability=capability,
                 endpoint_id=endpoint_id,
-                model_id=model_id,
+                model_id=pinned_model,
                 endpoint_url=endpoint,
                 api_key=SecretStr(api_key),
             )

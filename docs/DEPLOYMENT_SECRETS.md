@@ -2,6 +2,32 @@
 
 This repository uses GitHub Actions to deploy the synthetic development environment. It does not authorize production banking data, official SHB policy, or production approval workflows.
 
+## Final consolidated configuration map
+
+Every configuration value lives in exactly one of three destinations. The rule: a value is a GitHub Actions secret only if it is a credential the *deploy pipeline* uses; runtime credentials never touch GitHub; non-secret application structure is committed to the repo. This repository is **public**, so infrastructure coordinates that reveal topology stay as variables/runtime env and are not committed.
+
+| # | Item | Destination | Status |
+| --- | --- | --- | --- |
+| 1 | `VERCEL_TOKEN` | GitHub Actions **secret** (`staging`) | Required for the Vercel job |
+| 2 | `SUPABASE_ACCESS_TOKEN` | GitHub Actions **secret** | Required for the Supabase job |
+| 3 | `SUPABASE_DB_PASSWORD` (or `SUPABASE_DB_URL`) | GitHub Actions **secret** | Required for the Supabase job |
+| 4 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | GitHub Actions **secret** | Required for the Cloud Run job |
+| 5 | `GCP_DEPLOYER_SERVICE_ACCOUNT` | GitHub Actions **secret** | Required for the Cloud Run job |
+| 6 | `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_LOCATION`, `GAR_REPOSITORY`, `CLOUD_RUN_API_SERVICE`, `CLOUD_RUN_WORKER_JOB`, `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` | GitHub Actions **variables** (`staging`) | Non-secret coordinates; kept as variables (not committed) because the repo is public |
+| 7 | `VERCEL_CLI_VERSION`, `WORKER_RUNTIME_READY`, `VERCEL_PRODUCTION_URL` | GitHub Actions **variables** | Pinned version / feature gate / optional smoke URL |
+| 8 | `FPT_API_KEY` | **Google Secret Manager** (Cloud Run runtime) | Never in GitHub Actions. Unset until an FPT account exists |
+| 9 | `FPT_{REASONING,KIE,TABLE,VISION,EMBEDDING}_ENDPOINT_URL` and `_ENDPOINT_ID` | **Cloud Run runtime env** (from Secret Manager / deploy) | Tenant-specific; not committed. Unset — OPEN QUESTION, benchmark-gated |
+| 10 | `FPT_{CAP}_MODEL_ID` | **Versioned code/config** (committed catalog) | Non-secret product identifiers; hardened in code, not in repo secrets. Values benchmark-gated — commit only once chosen |
+| 11 | FPT capability set, routing policy, intended endpoint↔model pairing, `route_version`, `prompt_version`, `schema_version` | **Versioned code/config** (committed) | Application structure; belongs in git for provenance |
+
+**Non-negotiable notes on the FPT tier (items 8–11):**
+
+- There is **no default model**. Each of the five capabilities (`reasoning`, `kie`, `table`, `vision`, `embedding`) must be pinned to its own explicit endpoint + model, or be explicitly absent. A partially-configured capability fails closed (`incomplete FPT configuration`); a silent non-FPT or unconfigured-model fallback is forbidden by the project's global constraints.
+- **Model IDs are hardened into the committed catalog, not repo secrets/variables.** They are non-secret product identifiers (safe on a public repo), and pinning capability→model in versioned code gives PR review and provenance for every inference. The tenant-specific endpoint URL/ID stay in runtime env; only the API key is a secret.
+- The committed `model_id` must match the model the runtime endpoint actually serves. Because model and endpoint are declared in different places, the gateway **fails closed on any endpoint↔model mismatch** rather than running a wrong model silently; the catalog records the intended pairing so drift is caught.
+- The concrete endpoint IDs and model IDs are **unresolved OPEN QUESTIONS**, benchmark-gated. Commit the catalog schema and versions now; fill in real model IDs (via PR) only when benchmark-selected models exist. Do not fabricate or default placeholder values.
+- The intake slice (frontend + case/upload/review) runs and fails closed **without any FPT configuration**; the FPT tier is only needed once inference stages go live.
+
 ## Required GitHub Environment
 
 Create a protected GitHub Environment named `staging`. Put all secrets below in that environment, not in workflow YAML. Require reviewers before creating a separate `production` environment. The deploy workflow only runs from `main` after the `CI` workflow succeeds.

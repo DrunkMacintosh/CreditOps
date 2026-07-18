@@ -19,7 +19,7 @@ from creditops.infrastructure.fpt.gateway import FPTInferenceGateway
 
 async def main() -> int:
     try:
-        catalog = FPTCatalog.from_environment()
+        catalog = FPTCatalog.from_configuration()
         catalog.config_for("reasoning")
     except (ValueError, KeyError) as exc:
         print(f"SKIP: FPT reasoning endpoint is not fully configured ({exc})")
