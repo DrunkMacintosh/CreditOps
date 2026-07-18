@@ -49,12 +49,13 @@ Read this file and the relevant documents under [`docs/`](docs/) before changing
 ## Context map
 
 - [Project context](docs/PROJECT_CONTEXT.md)
-- [Banking workflow](docs/BANKING_WORKFLOW.md)
+- Banking workflow — not yet written; official SHB workflow input is pending (see [Open questions](docs/OPEN_QUESTIONS.md))
 - [Agent architecture](docs/AGENT_ARCHITECTURE.md)
-- [Evidence Gap Resolution](docs/EVIDENCE_GAP_RESOLUTION.md)
-- [Domain model](docs/DOMAIN_MODEL.md)
+- Evidence Gap Resolution — not yet written; gap lifecycle currently defined by the schema and [Glossary](CONTEXT.md)
+- Domain model — not yet written; canonical terms live in the [Glossary](CONTEXT.md), structures in `supabase/migrations/`
 - [Technical direction](docs/TECHNICAL_DIRECTION.md)
-- [Product boundaries](docs/PRODUCT_BOUNDARIES.md)
+- Product boundaries — not yet written; binding boundaries are the "Non-negotiable boundaries" above and [Decision log](docs/DECISION_LOG.md)
 - [Open questions](docs/OPEN_QUESTIONS.md)
 - [Decision log](docs/DECISION_LOG.md)
-- [Glossary](docs/GLOSSARY.md)
+- [Architecture decision records](docs/adr/)
+- [Glossary](CONTEXT.md)

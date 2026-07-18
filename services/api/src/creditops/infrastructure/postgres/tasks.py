@@ -24,6 +24,7 @@ from creditops.application.ports.queue import (
     TaskRepository,
 )
 from creditops.domain.enums import TaskStatus
+from creditops.domain.orchestration import TaskType
 from creditops.infrastructure.postgres.repositories import DatabaseConnection
 
 
@@ -92,13 +93,18 @@ class PostgresTaskRepository(TaskRepository):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
         lease_until: datetime,
     ) -> TaskRecord | None:
         async with self._connection_factory() as connection:
             async with connection.transaction():
                 cursor = await connection.execute(
+                    # ``is not distinct from`` matches both a concrete document
+                    # version (document ingestion) and a NULL scope (case-scoped
+                    # agent tasks).  The document-currency check is guarded so a
+                    # document-less agent task is not fenced by a missing row,
+                    # while the case-version check still fences every stale task.
                     """
                     update public.processing_tasks as task
                     set status = 'RUNNING', attempt_count = task.attempt_count + 1,
@@ -107,7 +113,7 @@ class PostgresTaskRepository(TaskRepository):
                     where task.id = %s
                       and task.case_id = %s
                       and task.case_version = %s
-                      and task.document_version_id = %s
+                      and task.document_version_id is not distinct from %s
                       and task.status in ('PENDING', 'RETRY_WAIT')
                       and task.available_at <= statement_timestamp()
                       and (task.lease_until is null or task.lease_until <= statement_timestamp())
@@ -116,19 +122,22 @@ class PostgresTaskRepository(TaskRepository):
                         where current_case.id = task.case_id
                           and current_case.case_version = task.case_version
                       )
-                      and exists (
-                        select 1 from public.document_versions as version
-                        where version.id = task.document_version_id
-                          and version.case_id = task.case_id
-                          and version.case_version = task.case_version
-                          and version.stale_at is null
+                      and (
+                        task.document_version_id is null
+                        or exists (
+                          select 1 from public.document_versions as version
+                          where version.id = task.document_version_id
+                            and version.case_id = task.case_id
+                            and version.case_version = task.case_version
+                            and version.stale_at is null
+                        )
                       )
                     returning task.id, task.case_id, task.case_version,
                               task.document_version_id, task.status,
                               task.attempt_count, task.max_attempts,
                               task.available_at, task.lease_token, task.lease_until,
                               task.input_schema_version, task.input_payload,
-                              task.idempotency_key
+                              task.idempotency_key, task.task_type
                     """,
                     (
                         lease_token,
@@ -166,7 +175,7 @@ class PostgresTaskRepository(TaskRepository):
                    task.document_version_id, task.status,
                    task.attempt_count, task.max_attempts, task.available_at,
                    task.lease_token, task.lease_until, task.input_schema_version,
-                   task.input_payload, task.idempotency_key
+                   task.input_payload, task.idempotency_key, task.task_type
             from public.processing_tasks as task
             where {' and '.join(predicates)}
         """
@@ -181,7 +190,7 @@ class PostgresTaskRepository(TaskRepository):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
     ) -> TaskCheckpoint | None:
         async with self._connection_factory() as connection:
             cursor = await connection.execute(
@@ -193,7 +202,7 @@ class PostgresTaskRepository(TaskRepository):
                 from public.task_checkpoints as checkpoint
                 where checkpoint.task_id = %s and checkpoint.case_id = %s
                   and checkpoint.case_version = %s
-                  and checkpoint.document_version_id = %s
+                  and checkpoint.document_version_id is not distinct from %s
                 order by checkpoint.sequence_no desc
                 limit 1
                 """,
@@ -208,7 +217,7 @@ class PostgresTaskRepository(TaskRepository):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
         sequence_no: int,
         checkpoint_type: str,
@@ -218,6 +227,9 @@ class PostgresTaskRepository(TaskRepository):
         async with self._connection_factory() as connection:
             async with connection.transaction():
                 cursor = await connection.execute(
+                    # A left join keeps the document-currency fence for ingestion
+                    # tasks (the guard rejects a stale/missing version) while
+                    # allowing a document-less agent-task checkpoint through.
                     """
                     insert into public.task_checkpoints (
                       task_id, case_id, case_version, document_version_id,
@@ -230,13 +242,15 @@ class PostgresTaskRepository(TaskRepository):
                     join public.credit_cases as current_case
                       on current_case.id = task.case_id
                      and current_case.case_version = task.case_version
-                    join public.document_versions as version
+                    left join public.document_versions as version
                       on version.id = task.document_version_id
                      and version.case_id = task.case_id
                      and version.case_version = task.case_version
                      and version.stale_at is null
                     where task.id = %s and task.case_id = %s
-                      and task.case_version = %s and task.document_version_id = %s
+                      and task.case_version = %s
+                      and task.document_version_id is not distinct from %s
+                      and (task.document_version_id is null or version.id is not null)
                       and task.status = 'RUNNING'
                       and task.lease_token = %s
                       and task.lease_until > statement_timestamp()
@@ -278,7 +292,7 @@ class PostgresTaskRepository(TaskRepository):
                         lease_token = null, lease_until = null,
                         updated_at = clock_timestamp()
                     where id = %s and case_id = %s and case_version = %s
-                      and document_version_id = %s and status = 'RUNNING'
+                      and document_version_id is not distinct from %s and status = 'RUNNING'
                       and lease_token = %s and lease_until > statement_timestamp()
                     returning id
                     """,
@@ -301,7 +315,7 @@ class PostgresTaskRepository(TaskRepository):
         task_id: UUID,
         case_id: UUID,
         case_version: int,
-        document_version_id: UUID,
+        document_version_id: UUID | None,
         lease_token: UUID,
         reason: str,
         now: datetime,
@@ -325,7 +339,7 @@ class PostgresTaskRepository(TaskRepository):
                         completed_at = case when attempt_count >= max_attempts
                                            then clock_timestamp() else null end
                     where id = %s and case_id = %s and case_version = %s
-                      and document_version_id = %s and status = 'RUNNING'
+                      and document_version_id is not distinct from %s and status = 'RUNNING'
                       and lease_token = %s and lease_until > statement_timestamp()
                     returning status, attempt_count, available_at
                     """,
@@ -354,16 +368,17 @@ def _task(row: Sequence[Any]) -> TaskRecord:
         id=cast(UUID, row[0]),
         case_id=cast(UUID, row[1]),
         case_version=int(row[2]),
-        document_version_id=cast(UUID, row[3]),
+        document_version_id=cast("UUID | None", row[3]),
         status=TaskStatus(str(row[4])),
         attempt_count=int(row[5]),
         max_attempts=int(row[6]),
         available_at=cast(datetime, row[7]),
-        lease_token=cast(UUID | None, row[8]),
-        lease_until=cast(datetime | None, row[9]),
+        lease_token=cast("UUID | None", row[8]),
+        lease_until=cast("datetime | None", row[9]),
         input_schema_version=str(row[10]),
         input_payload=payload,
         idempotency_key=str(row[12]),
+        task_type=TaskType(str(row[13])),
     )
 
 
@@ -375,7 +390,7 @@ def _checkpoint(row: Sequence[Any]) -> TaskCheckpoint:
         task_id=cast(UUID, row[0]),
         case_id=cast(UUID, row[1]),
         case_version=int(row[2]),
-        document_version_id=cast(UUID, row[3]),
+        document_version_id=cast("UUID | None", row[3]),
         sequence_no=int(row[4]),
         checkpoint_type=str(row[5]),
         checkpoint_schema_version=str(row[6]),

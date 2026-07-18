@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID, uuid4
 
 from creditops.application.ports.queue import (
@@ -20,6 +20,7 @@ from creditops.application.ports.queue import (
     TaskRepository,
 )
 from creditops.domain.enums import TaskStatus
+from creditops.domain.orchestration import TaskType
 
 
 class WorkerOutcome(StrEnum):
@@ -52,6 +53,40 @@ class TaskProcessor(Protocol):
     ) -> StageResult: ...
 
 
+class TaskProcessorRegistry(Protocol):
+    """Resolve the processor for a task type, one processor per finite type.
+
+    A registry must always return a processor.  A type with no registered
+    processor resolves to a manual-review processor so an unknown task fails
+    closed (FAILED_MANUAL_REVIEW with audit) rather than crashing the worker.
+    """
+
+    def processor_for(self, task_type: TaskType) -> TaskProcessor: ...
+
+
+class _SingleProcessorRegistry:
+    """Backward-compatible adapter: one processor handles every task type.
+
+    Existing callers that inject a single ``TaskProcessor`` keep their exact
+    behaviour; the worker still dispatches through the registry seam.
+    """
+
+    def __init__(self, processor: TaskProcessor) -> None:
+        self._processor = processor
+
+    def processor_for(self, task_type: TaskType) -> TaskProcessor:
+        del task_type
+        return self._processor
+
+
+def _as_registry(
+    processor: TaskProcessor | TaskProcessorRegistry,
+) -> TaskProcessorRegistry:
+    if hasattr(processor, "processor_for"):
+        return cast(TaskProcessorRegistry, processor)
+    return _SingleProcessorRegistry(processor)
+
+
 class WorkerRunError(RuntimeError):
     """Unexpected worker failure; durable retry policy still applies."""
 
@@ -76,7 +111,7 @@ class RunWorkerOnce:
         self,
         tasks: TaskRepository,
         queue: QueuePort,
-        processor: TaskProcessor,
+        processor: TaskProcessor | TaskProcessorRegistry,
         *,
         worker_id: UUID | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -90,7 +125,7 @@ class RunWorkerOnce:
             raise ValueError("retry base delay must be positive")
         self._tasks = tasks
         self._queue = queue
-        self._processor = processor
+        self._registry = _as_registry(processor)
         self._worker_id = worker_id or uuid4()
         self._clock = clock or (lambda: datetime.now(UTC))
         self._slot_lease_seconds = slot_lease_seconds
@@ -196,7 +231,8 @@ class RunWorkerOnce:
                 await heartbeat()
                 return latest
 
-            result = await self._processor.process(claimed_task, latest, save_checkpoint)
+            processor = self._registry.processor_for(claimed_task.task_type)
+            result = await processor.process(claimed_task, latest, save_checkpoint)
             if result.status == WorkerOutcome.SUPERSEDED:
                 await self._tasks.mark_superseded(
                     task_id=claimed_task.id,
