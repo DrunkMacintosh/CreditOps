@@ -201,7 +201,7 @@ interface ApiErrorBody {
 
 export async function fetchUnderwritingAssessment(
   caseId: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = (input, init) => fetch(input, init),
 ): Promise<UnderwritingAssessmentView> {
   const response = await fetcher(
     `${BFF_BASE_URL}/api/v1/cases/${encodeURIComponent(caseId)}/underwriting`,

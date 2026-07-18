@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import { IBM_Plex_Mono } from "next/font/google";
 import type { ReactNode } from "react";
 
+import { ScenarioSwitcher } from "../components/scenario/scenario-switcher";
+import { ScenarioProvider } from "../lib/fixtures/scenario-context";
+
 import "./globals.css";
 
 // Exposes --font-mono-next so the design-token var(--font-mono) resolves to a
@@ -21,7 +24,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html className={ibmPlexMono.variable} lang="vi">
-      <body>{children}</body>
+      <body>
+        <ScenarioProvider>
+          {children}
+          <ScenarioSwitcher />
+        </ScenarioProvider>
+      </body>
     </html>
   );
 }

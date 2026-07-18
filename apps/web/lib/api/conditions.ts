@@ -244,7 +244,7 @@ export class ConditionsApiClient {
 
   constructor(
     baseUrl = BFF_BASE_URL,
-    private readonly fetcher: Fetcher = fetch,
+    private readonly fetcher: Fetcher = (input, init) => fetch(input, init),
     private readonly csrfTokenProvider: CsrfTokenProvider = readBrowserCsrfToken,
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, "");

@@ -516,7 +516,7 @@ export class LegalApiClient implements LegalApi {
 
   constructor(
     baseUrl: string = BFF_BASE_URL,
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly fetcher: typeof fetch = (input, init) => fetch(input, init),
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
   }
@@ -561,6 +561,9 @@ export function getLegalErrorMessage(error: unknown): string {
       case "LEGAL_SERVICE_UNAVAILABLE":
       case "CASE_SERVICE_UNAVAILABLE":
         return "Dịch vụ pháp chế tạm thời chưa sẵn sàng. Vui lòng thử lại sau ít phút.";
+      case "POLICY_SOURCE_UNAVAILABLE":
+        // Fail closed: never fabricate a policy result when the source is down.
+        return "Nguồn tra cứu chính sách/pháp lý hiện không khả dụng. Hệ thống không suy đoán kết quả; vui lòng thử lại sau ít phút.";
       case "CASE_NOT_ACCESSIBLE":
         return "Không tìm thấy hồ sơ hoặc bạn không có quyền truy cập rà soát pháp chế.";
       case "INSUFFICIENT_ROLE":
