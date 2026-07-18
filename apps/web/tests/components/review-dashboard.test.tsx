@@ -8,15 +8,23 @@ import { AuditTimeline, AuditWorkspace } from "../../components/audit/audit-time
 import type { AuditEventView } from "../../components/audit/audit-timeline";
 import { ConflictList } from "../../components/evidence/conflict-list";
 import { EvidenceDashboard, FactLedger } from "../../components/evidence/fact-ledger";
-import { GapList, GapWorkspace, type GapView } from "../../components/gaps/gap-list";
+import {
+  GapList,
+  GapWorkspace,
+  type GapRequestItemView,
+} from "../../components/gaps/gap-list";
 import { IntakeCompletionDialog } from "../../components/gaps/intake-completion-dialog";
 import { HandoffSummary, HandoffWorkspace } from "../../components/handoff/handoff-summary";
 import type { HandoffView } from "../../components/handoff/handoff-summary";
+import { ApiClientError } from "../../lib/api/client";
 import type {
+  AuditEventDto,
   ConfirmedFactDto,
   ConflictDto,
   CreditCaseDto,
+  IntakeCompletionResultDto,
 } from "../../lib/api/contracts";
+import type { GapRequestBatchStatus } from "../../lib/api/gap-requests";
 
 // Consolidated review-dashboard suite (plan Task 11 deliverable). Merges the
 // former evidence-dashboard, gap-workspace, and handoff-audit component tests
@@ -216,78 +224,436 @@ describe("Evidence dashboard", () => {
 });
 
 describe("Gaps workspace", () => {
-  const allGaps: GapView[] = [
-    {
-      id: "gap-provisional",
-      status: "PROVISIONAL",
-      issueVi: "Thiếu báo cáo tài chính năm gần nhất",
-      missingInformationVi: "Chưa có báo cáo tài chính đã kiểm toán năm 2025",
-      suggestedEvidenceVi: ["Báo cáo tài chính năm 2025", "Biên bản họp cổ đông"],
-    },
-    {
-      id: "gap-formal",
-      status: "FORMAL",
-      issueVi: "Thiếu hợp đồng thuê nhà xưởng",
-      missingInformationVi: "Chưa có bản sao hợp đồng thuê nhà xưởng còn hiệu lực",
-      suggestedEvidenceVi: [],
-    },
-    {
-      id: "gap-resolved",
-      status: "RESOLVED",
-      issueVi: "Thiếu giấy phép kinh doanh",
-      missingInformationVi: "Đã bổ sung giấy phép kinh doanh hợp lệ",
-      suggestedEvidenceVi: [],
-    },
-    {
-      id: "gap-stale",
-      status: "STALE",
-      issueVi: "Thiếu bảng lương nhân viên",
-      missingInformationVi: "Yêu cầu này không còn áp dụng cho hồ sơ hiện tại",
-      suggestedEvidenceVi: [],
-    },
-  ];
+  const ITEM_A = "11111111-1111-4111-8111-111111111111";
+  const ITEM_B = "22222222-2222-4222-8222-222222222222";
+  const GAP_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const HASH = "a".repeat(64);
+
+  function buildItem(overrides: Partial<GapRequestItemView> = {}): GapRequestItemView {
+    return {
+      id: ITEM_A,
+      gapId: GAP_A,
+      requestText: "Bổ sung báo cáo tài chính đã kiểm toán năm 2025",
+      blockingLevel: "BLOCKING",
+      ...overrides,
+    };
+  }
+
+  function buildBatchStatus(
+    overrides: Partial<GapRequestBatchStatus> = {},
+  ): GapRequestBatchStatus {
+    return {
+      batch: {
+        batchId: "batch-1",
+        caseId: "case-1",
+        caseVersion: 5,
+        openGapSnapshotHash: HASH,
+        items: [buildItem()],
+      },
+      stale: false,
+      currentOpenGapHash: HASH,
+      dispositions: [],
+      gateStatus: "OPEN",
+      ...overrides,
+    };
+  }
+
+  function buildCase(canCompleteIntake = false): CreditCaseDto {
+    return {
+      id: "case-1",
+      version: 5,
+      assignedOfficerId: "officer-synthetic",
+      requestedAmount: "1000000000",
+      purpose: "Bổ sung vốn lưu động",
+      workflowState: "INTAKE",
+      updatedAt: "2026-07-17T08:00:00Z",
+      capabilities: { canUpload: true, canConfirm: true, canCompleteIntake },
+    };
+  }
 
   describe("GapList", () => {
-    it("renders all four statuses with exact Vietnamese badges; resolved/stale still listed", () => {
-      render(<GapList gaps={allGaps} />);
+    it("renders each drafted request with its blocking-level badge and text; no approve/remove control", () => {
+      const items: GapRequestItemView[] = [
+        buildItem(),
+        buildItem({ id: ITEM_B, blockingLevel: "CONDITIONAL", requestText: "Bổ sung hợp đồng thuê xưởng" }),
+        buildItem({ id: "33333333-3333-4333-8333-333333333333", blockingLevel: "CLARIFICATION", requestText: "Làm rõ mục đích vay" }),
+      ];
 
-      expect(screen.getByRole("heading", { name: "Khoảng trống chứng cứ" })).toBeVisible();
-      expect(screen.getByText("Tạm thời")).toBeVisible();
-      expect(screen.getByText("Chính thức")).toBeVisible();
-      expect(screen.getByText("Đã giải quyết")).toBeVisible();
-      expect(screen.getByText("Đã lỗi thời")).toBeVisible();
+      render(<GapList items={items} />);
 
-      expect(screen.getByText("Thiếu báo cáo tài chính năm gần nhất")).toBeVisible();
-      expect(screen.getByText("Thiếu giấy phép kinh doanh")).toBeVisible();
-      expect(screen.getByText("Thiếu bảng lương nhân viên")).toBeVisible();
-    });
-
-    it("shows the draft/not-approved suggestion label only when suggestions exist", () => {
-      render(<GapList gaps={allGaps} />);
-
-      const labels = screen.getAllByText("Đề xuất tài liệu (bản nháp, chưa được phê duyệt)");
-      expect(labels).toHaveLength(1);
-      expect(screen.getByText("Báo cáo tài chính năm 2025")).toBeVisible();
-      expect(screen.getByText("Biên bản họp cổ đông")).toBeVisible();
-    });
-
-    it("renders no close/resolve controls", () => {
-      render(<GapList gaps={allGaps} />);
-
+      expect(
+        screen.getByRole("heading", { name: "Danh sách yêu cầu bổ sung bằng chứng" }),
+      ).toBeVisible();
+      expect(screen.getByText("Chặn")).toBeVisible();
+      expect(screen.getByText("Có điều kiện")).toBeVisible();
+      expect(screen.getByText("Cần làm rõ")).toBeVisible();
+      expect(screen.getByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025")).toBeVisible();
+      expect(screen.getByText("Bổ sung hợp đồng thuê xưởng")).toBeVisible();
+      // Read-only: a request is only ever dispositioned through the batch form.
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
     });
 
-    it("shows the empty state when there are no gaps", () => {
-      render(<GapList gaps={[]} />);
+    it("fails closed on an unknown blocking level", () => {
+      render(<GapList items={[buildItem({ blockingLevel: "SOMETHING_NEW" })]} />);
+      expect(screen.getByText("Trạng thái chưa được hỗ trợ")).toBeVisible();
+    });
 
-      expect(screen.getByText("Chưa ghi nhận khoảng trống chứng cứ.")).toBeVisible();
+    it("shows the empty state when there are no drafted requests", () => {
+      render(<GapList items={[]} />);
+      expect(
+        screen.getByText(
+          "Không có yêu cầu bổ sung nào: hiện không còn khoảng trống chứng cứ đang mở.",
+        ),
+      ).toBeVisible();
+    });
+  });
+
+  describe("GapWorkspace — batch load and assemble", () => {
+    it("does not assemble a batch on render — it only GETs the current batch", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(buildCase()),
+        completeIntake: vi.fn(),
+      };
+      const gapApi = {
+        getBatch: vi.fn().mockResolvedValue(buildBatchStatus()),
+        assembleBatch: vi.fn(),
+        recordDisposition: vi.fn(),
+      };
+
+      render(<GapWorkspace api={api} caseId="case-1" gapApi={gapApi} />);
+
+      expect(
+        await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025"),
+      ).toBeVisible();
+      expect(gapApi.getBatch).toHaveBeenCalledTimes(1);
+      // Never auto-mutate on render.
+      expect(gapApi.assembleBatch).not.toHaveBeenCalled();
+    });
+
+    it("shows the assemble empty state on 404 and only assembles on the explicit action", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(buildCase()),
+        completeIntake: vi.fn(),
+      };
+      const gapApi = {
+        getBatch: vi
+          .fn()
+          .mockRejectedValueOnce(
+            new ApiClientError(404, "GAP_REQUEST_BATCH_NOT_AVAILABLE", "", false),
+          )
+          .mockResolvedValueOnce(buildBatchStatus()),
+        assembleBatch: vi.fn().mockResolvedValue(buildBatchStatus().batch),
+        recordDisposition: vi.fn(),
+      };
+
+      render(<GapWorkspace api={api} caseId="case-1" gapApi={gapApi} />);
+
+      const assembleButton = await screen.findByRole("button", {
+        name: "Tạo/tải danh sách yêu cầu bổ sung",
+      });
+      expect(
+        screen.getByText("Chưa có danh sách yêu cầu bổ sung cho phiên bản hồ sơ này."),
+      ).toBeVisible();
+      expect(gapApi.assembleBatch).not.toHaveBeenCalled();
+
+      fireEvent.click(assembleButton);
+
+      await waitFor(() => expect(gapApi.assembleBatch).toHaveBeenCalledTimes(1));
+      expect(
+        await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025"),
+      ).toBeVisible();
+    });
+
+    it("shows the stale banner and a reassemble button, hiding the disposition form while stale", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(buildCase()),
+        completeIntake: vi.fn(),
+      };
+      const gapApi = {
+        getBatch: vi
+          .fn()
+          .mockResolvedValueOnce(buildBatchStatus({ stale: true, currentOpenGapHash: "b".repeat(64) }))
+          .mockResolvedValueOnce(buildBatchStatus()),
+        assembleBatch: vi.fn().mockResolvedValue(buildBatchStatus().batch),
+        recordDisposition: vi.fn(),
+      };
+
+      render(<GapWorkspace api={api} caseId="case-1" gapApi={gapApi} />);
+
+      expect(
+        await screen.findByText("Danh sách đã cũ so với khoảng trống hiện tại."),
+      ).toBeVisible();
+      // The disposition submit is not offered on a stale batch.
+      expect(
+        screen.queryByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      ).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Tạo lại danh sách" }));
+      await waitFor(() => expect(gapApi.assembleBatch).toHaveBeenCalledTimes(1));
+    });
+  });
+
+  describe("GapWorkspace — batch disposition form", () => {
+    function renderWithBatch(status: GapRequestBatchStatus) {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(buildCase()),
+        completeIntake: vi.fn(),
+      };
+      const gapApi = {
+        getBatch: vi.fn().mockResolvedValue(status),
+        assembleBatch: vi.fn(),
+        recordDisposition: vi.fn().mockResolvedValue({
+          disposition: {
+            id: "disp-1",
+            batchId: status.batch.batchId,
+            dispositionType: "APPROVED_ALL",
+            itemDispositions: {},
+            editedTexts: {},
+            actorId: "officer-1",
+            actorRole: "INTAKE_OFFICER",
+            rationale: "ok",
+            createdAt: "2026-07-18T09:00:00Z",
+          },
+          stale: false,
+          gateStatus: "SATISFIED",
+        }),
+      };
+      render(<GapWorkspace api={api} caseId="case-1" gapApi={gapApi} />);
+      return { api, gapApi };
+    }
+
+    it("never preselects a disposition type and blocks submit without one", async () => {
+      const { gapApi } = renderWithBatch(buildBatchStatus());
+
+      await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025");
+
+      const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+      expect(radios.length).toBeGreaterThan(0);
+      for (const radio of radios) expect(radio.checked).toBe(false);
+
+      await userEvent.type(
+        screen.getByLabelText(/Lý do quyết định/),
+        "Đã rà soát toàn bộ yêu cầu.",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+
+      expect(screen.getByText("Chọn một loại quyết định trước khi ghi.")).toBeVisible();
+      expect(gapApi.recordDisposition).not.toHaveBeenCalled();
+    });
+
+    it("requires a rationale even after a type is chosen", async () => {
+      const { gapApi } = renderWithBatch(buildBatchStatus());
+
+      await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025");
+      await userEvent.click(screen.getByLabelText("Duyệt toàn bộ yêu cầu"));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+
+      expect(
+        screen.getByText("Nhập lý do cho quyết định; đây là trường bắt buộc."),
+      ).toBeVisible();
+      expect(gapApi.recordDisposition).not.toHaveBeenCalled();
+    });
+
+    it("records APPROVED_ALL with rationale and then refetches", async () => {
+      const { gapApi } = renderWithBatch(buildBatchStatus());
+
+      await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025");
+      await userEvent.click(screen.getByLabelText("Duyệt toàn bộ yêu cầu"));
+      await userEvent.type(
+        screen.getByLabelText(/Lý do quyết định/),
+        "Tất cả yêu cầu hợp lệ, phê duyệt gửi bổ sung.",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+
+      await waitFor(() =>
+        expect(gapApi.recordDisposition).toHaveBeenCalledWith("case-1", "batch-1", {
+          dispositionType: "APPROVED_ALL",
+          rationale: "Tất cả yêu cầu hợp lệ, phê duyệt gửi bổ sung.",
+        }),
+      );
+      await waitFor(() => expect(gapApi.getBatch).toHaveBeenCalledTimes(2));
+    });
+
+    it("offers NO_OUTBOUND_REQUESTS only when the batch has zero drafted items", async () => {
+      const { gapApi } = renderWithBatch(
+        buildBatchStatus({
+          batch: {
+            batchId: "batch-empty",
+            caseId: "case-1",
+            caseVersion: 5,
+            openGapSnapshotHash: HASH,
+            items: [],
+          },
+        }),
+      );
+
+      await screen.findByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" });
+      // Empty batch: NO_OUTBOUND_REQUESTS is offered, APPROVED_ALL is not.
+      expect(screen.getByLabelText("Không phát sinh yêu cầu gửi ra")).toBeVisible();
+      expect(screen.queryByLabelText("Duyệt toàn bộ yêu cầu")).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByLabelText("Không phát sinh yêu cầu gửi ra"));
+      await userEvent.type(
+        screen.getByLabelText(/Lý do quyết định/),
+        "Không còn khoảng trống, không cần gửi yêu cầu.",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+
+      await waitFor(() =>
+        expect(gapApi.recordDisposition).toHaveBeenCalledWith("case-1", "batch-empty", {
+          dispositionType: "NO_OUTBOUND_REQUESTS",
+          rationale: "Không còn khoảng trống, không cần gửi yêu cầu.",
+        }),
+      );
+    });
+
+    it("does not offer NO_OUTBOUND_REQUESTS when the batch has drafted items", async () => {
+      renderWithBatch(buildBatchStatus());
+      await screen.findByLabelText("Duyệt toàn bộ yêu cầu");
+      expect(screen.queryByLabelText("Không phát sinh yêu cầu gửi ra")).not.toBeInTheDocument();
+    });
+
+    it("requires a per-item choice for APPROVED_WITH_CHANGES, then records the map", async () => {
+      const { gapApi } = renderWithBatch(buildBatchStatus());
+
+      await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025");
+      await userEvent.click(screen.getByLabelText("Duyệt kèm chỉnh sửa từng mục"));
+      await userEvent.type(
+        screen.getByLabelText(/Lý do quyết định/),
+        "Bỏ một yêu cầu không còn cần thiết.",
+      );
+      // Submitting before choosing per-item is blocked.
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+      expect(
+        screen.getByText("Chọn cách xử lý cho từng mục yêu cầu bổ sung."),
+      ).toBeVisible();
+      expect(gapApi.recordDisposition).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByLabelText("Loại bỏ"));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+
+      await waitFor(() =>
+        expect(gapApi.recordDisposition).toHaveBeenCalledWith("case-1", "batch-1", {
+          dispositionType: "APPROVED_WITH_CHANGES",
+          rationale: "Bỏ một yêu cầu không còn cần thiết.",
+          itemDispositions: { [ITEM_A]: "REMOVED" },
+          editedTexts: {},
+        }),
+      );
+    });
+
+    it("requires replacement text for an EDITED item and records it", async () => {
+      const { gapApi } = renderWithBatch(buildBatchStatus());
+
+      await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025");
+      await userEvent.click(screen.getByLabelText("Duyệt kèm chỉnh sửa từng mục"));
+      await userEvent.type(
+        screen.getByLabelText(/Lý do quyết định/),
+        "Chỉnh lại nội dung yêu cầu cho rõ.",
+      );
+      await userEvent.click(screen.getByLabelText("Chỉnh sửa nội dung"));
+
+      // EDITED requires replacement text.
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+      expect(
+        screen.getByText("Nhập nội dung chỉnh sửa cho mỗi mục được đánh dấu chỉnh sửa."),
+      ).toBeVisible();
+      expect(gapApi.recordDisposition).not.toHaveBeenCalled();
+
+      await userEvent.type(
+        screen.getByLabelText(/Nội dung chỉnh sửa/),
+        "Bổ sung báo cáo tài chính năm 2025 kèm thuyết minh.",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+
+      await waitFor(() =>
+        expect(gapApi.recordDisposition).toHaveBeenCalledWith("case-1", "batch-1", {
+          dispositionType: "APPROVED_WITH_CHANGES",
+          rationale: "Chỉnh lại nội dung yêu cầu cho rõ.",
+          itemDispositions: { [ITEM_A]: "EDITED" },
+          editedTexts: { [ITEM_A]: "Bổ sung báo cáo tài chính năm 2025 kèm thuyết minh." },
+        }),
+      );
+    });
+
+    it("keeps the draft and prompts a reload on a 409", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(buildCase()),
+        completeIntake: vi.fn(),
+      };
+      const gapApi = {
+        getBatch: vi.fn().mockResolvedValue(buildBatchStatus()),
+        assembleBatch: vi.fn(),
+        recordDisposition: vi
+          .fn()
+          .mockRejectedValue(new ApiClientError(409, "STALE_BATCH", "", false)),
+      };
+      render(<GapWorkspace api={api} caseId="case-1" gapApi={gapApi} />);
+
+      await screen.findByText("Bổ sung báo cáo tài chính đã kiểm toán năm 2025");
+      await userEvent.click(screen.getByLabelText("Duyệt toàn bộ yêu cầu"));
+      await userEvent.type(
+        screen.getByLabelText(/Lý do quyết định/),
+        "Phê duyệt toàn bộ yêu cầu.",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Duyệt nội dung yêu cầu bổ sung" }),
+      );
+
+      // The reload prompt appears and the draft rationale is preserved.
+      expect(
+        await screen.findByRole("button", { name: "Tải lại danh sách" }),
+      ).toBeVisible();
+      expect(
+        screen.getByText("Dữ liệu đã thay đổi. Vui lòng tải lại để xem bản mới nhất."),
+      ).toBeVisible();
+      expect((screen.getByLabelText(/Lý do quyết định/) as HTMLTextAreaElement).value).toBe(
+        "Phê duyệt toàn bộ yêu cầu.",
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Tải lại danh sách" }));
+      await waitFor(() => expect(gapApi.getBatch).toHaveBeenCalledTimes(2));
+    });
+
+    it("shows the completion trigger when the officer may complete intake", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(buildCase(true)),
+        completeIntake: vi.fn(),
+      };
+      const gapApi = {
+        getBatch: vi.fn().mockResolvedValue(buildBatchStatus()),
+        assembleBatch: vi.fn(),
+        recordDisposition: vi.fn(),
+      };
+      render(<GapWorkspace api={api} caseId="case-1" gapApi={gapApi} />);
+
+      expect(
+        await screen.findByRole("button", { name: "Hoàn tất tiếp nhận…" }),
+      ).toBeVisible();
     });
   });
 
   describe("IntakeCompletionDialog", () => {
     const baseProps = {
       onClose: vi.fn(),
-      onConfirm: vi.fn(),
+      onComplete: vi.fn(),
+      caseId: "case-1",
       openGapCount: 0,
       caseVersion: 3,
       canCompleteIntake: true,
@@ -295,28 +661,25 @@ describe("Gaps workspace", () => {
 
     it("is not in the document when closed", () => {
       render(<IntakeCompletionDialog {...baseProps} open={false} />);
-
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("shows the heading and mandatory sentence, gates confirm on the checkbox, and calls onConfirm once", async () => {
+    it("gates confirm on the checkbox, then calls onComplete once and shows the handoff", async () => {
       const user = userEvent.setup();
-      const onConfirm = vi.fn();
+      const result: IntakeCompletionResultDto = {
+        handoffId: "handoff-77",
+        caseVersion: 3,
+        state: "READY_FOR_SPECIALIST_REVIEW",
+        created: true,
+      };
+      const onComplete = vi.fn().mockResolvedValue(result);
 
-      render(
-        <IntakeCompletionDialog
-          {...baseProps}
-          onConfirm={onConfirm}
-          open
-        />,
-      );
+      render(<IntakeCompletionDialog {...baseProps} onComplete={onComplete} open />);
 
       expect(
         screen.getByRole("heading", { name: "Hoàn tất bộ hồ sơ tiếp nhận", level: 2 }),
       ).toBeVisible();
-      expect(
-        screen.getByText(/Đây không phải quyết định tín dụng\./),
-      ).toBeVisible();
+      expect(screen.getByText(/Đây không phải quyết định tín dụng\./)).toBeVisible();
 
       const confirmButton = screen.getByRole("button", { name: "Hoàn tất tiếp nhận" });
       expect(confirmButton).toBeDisabled();
@@ -329,20 +692,53 @@ describe("Gaps workspace", () => {
       expect(confirmButton).toBeEnabled();
 
       await user.click(confirmButton);
-      expect(onConfirm).toHaveBeenCalledTimes(1);
+
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText(/handoff-77/)).toBeVisible();
+      expect(screen.getByText(/Sẵn sàng cho chuyên viên thẩm định/)).toBeVisible();
+      const link = screen.getByRole("link", { name: "Mở bàn giao" });
+      expect(link).toHaveAttribute("href", "/ho-so/case-1/ban-giao");
+    });
+
+    it("renders the unresolved reasons on a 409 INTAKE_INCOMPLETE", async () => {
+      const user = userEvent.setup();
+      const onComplete = vi.fn().mockRejectedValue(
+        new ApiClientError(409, "INTAKE_INCOMPLETE", "", false, null, {
+          reasons: [
+            "Còn 2 dữ kiện chưa được xử lý",
+            "Còn 1 mâu thuẫn chưa giải quyết",
+          ],
+          unresolvedCount: 3,
+        }),
+      );
+
+      render(<IntakeCompletionDialog {...baseProps} onComplete={onComplete} open />);
+
+      await user.click(
+        screen.getByLabelText(
+          "Tôi xác nhận đã rà soát toàn bộ tài liệu và khoảng trống chứng cứ.",
+        ),
+      );
+      await user.click(screen.getByRole("button", { name: "Hoàn tất tiếp nhận" }));
+
+      expect(
+        await screen.findByText("Hồ sơ tiếp nhận chưa hoàn tất; các mục chưa xử lý:"),
+      ).toBeVisible();
+      expect(screen.getByText("Còn 2 dữ kiện chưa được xử lý")).toBeVisible();
+      expect(screen.getByText("Còn 1 mâu thuẫn chưa giải quyết")).toBeVisible();
+      // No optimistic completion: the confirm button is still present, no handoff.
+      expect(screen.queryByRole("link", { name: "Mở bàn giao" })).not.toBeInTheDocument();
     });
 
     it("shows the open-gap warning panel when openGapCount > 0", () => {
       render(<IntakeCompletionDialog {...baseProps} open openGapCount={4} />);
-
       expect(
         screen.getByText("Còn 4 khoảng trống chứng cứ chưa giải quyết."),
       ).toBeVisible();
     });
 
-    it("hides the confirm button and shows the permission note when canCompleteIntake is false", () => {
+    it("hides confirm and shows the permission note when canCompleteIntake is false", () => {
       render(<IntakeCompletionDialog {...baseProps} canCompleteIntake={false} open />);
-
       expect(
         screen.queryByRole("button", { name: "Hoàn tất tiếp nhận" }),
       ).not.toBeInTheDocument();
@@ -351,55 +747,22 @@ describe("Gaps workspace", () => {
       ).toBeVisible();
     });
 
-    it("keeps confirm disabled and shows the reason when submitUnavailableReason is set, even after checking", async () => {
-      const user = userEvent.setup();
-
-      render(
-        <IntakeCompletionDialog
-          {...baseProps}
-          open
-          submitUnavailableReason="Hợp đồng API hoàn tất tiếp nhận chưa được công bố; thao tác sẽ khả dụng khi backend phát hành."
-        />,
-      );
-
-      expect(
-        screen.getByText(
-          "Hợp đồng API hoàn tất tiếp nhận chưa được công bố; thao tác sẽ khả dụng khi backend phát hành.",
-        ),
-      ).toBeVisible();
-
-      const confirmButton = screen.getByRole("button", { name: "Hoàn tất tiếp nhận" });
-      expect(confirmButton).toBeDisabled();
-
-      await user.click(
-        screen.getByLabelText(
-          "Tôi xác nhận đã rà soát toàn bộ tài liệu và khoảng trống chứng cứ.",
-        ),
-      );
-      expect(confirmButton).toBeDisabled();
-    });
-
     it("closes on Escape", () => {
       const onClose = vi.fn();
-
       render(<IntakeCompletionDialog {...baseProps} onClose={onClose} open />);
-
       fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("closes when the Hủy button is clicked", () => {
       const onClose = vi.fn();
-
       render(<IntakeCompletionDialog {...baseProps} onClose={onClose} open />);
-
       fireEvent.click(screen.getByRole("button", { name: "Hủy" }));
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("traps Tab focus inside the dialog and never reaches background controls", async () => {
       const user = userEvent.setup();
-
       render(
         <div>
           <button type="button">trước hộp thoại</button>
@@ -411,91 +774,16 @@ describe("Gaps workspace", () => {
       const checkbox = screen.getByLabelText(
         "Tôi xác nhận đã rà soát toàn bộ tài liệu và khoảng trống chứng cứ.",
       );
-      // Enable confirm so all three dialog controls participate in the tab cycle.
       await user.click(checkbox);
       const confirm = screen.getByRole("button", { name: "Hoàn tất tiếp nhận" });
 
-      // From the last control, Tab forward must wrap to the first control inside
-      // the dialog — not spill onto the background trigger button.
       confirm.focus();
       expect(confirm).toHaveFocus();
       await user.tab();
-      expect(checkbox).toHaveFocus();
       expect(outside).not.toHaveFocus();
 
-      // From the first control, Shift+Tab must wrap back to the last control.
       await user.tab({ shift: true });
-      expect(confirm).toHaveFocus();
       expect(outside).not.toHaveFocus();
-    });
-  });
-
-  describe("GapWorkspace (page loader)", () => {
-    const creditCase = (canCompleteIntake: boolean): CreditCaseDto => ({
-      id: "case-1",
-      version: 5,
-      assignedOfficerId: "officer-synthetic",
-      requestedAmount: "1000000000",
-      purpose: "Bổ sung vốn lưu động",
-      workflowState: "INTAKE",
-      updatedAt: "2026-07-17T08:00:00Z",
-      capabilities: { canUpload: true, canConfirm: true, canCompleteIntake },
-    });
-
-    it("hides the completion trigger and shows the contract-pending panel when canCompleteIntake is false", async () => {
-      const api = { getCase: vi.fn().mockResolvedValue(creditCase(false)) };
-
-      render(<GapWorkspace api={api} caseId="case-1" />);
-
-      expect(await screen.findByRole("heading", { name: "Khoảng trống chứng cứ" })).toBeVisible();
-      expect(
-        screen.getByText(
-          "Danh sách khoảng trống chưa khả dụng: máy chủ chưa công bố hợp đồng API cho khoảng trống chứng cứ (kế hoạch Task 9).",
-        ),
-      ).toBeVisible();
-      expect(
-        screen.queryByRole("button", { name: "Hoàn tất tiếp nhận…" }),
-      ).not.toBeInTheDocument();
-    });
-
-    it("shows the completion trigger and opens the gated dialog when canCompleteIntake is true", async () => {
-      const api = { getCase: vi.fn().mockResolvedValue(creditCase(true)) };
-
-      render(<GapWorkspace api={api} caseId="case-1" />);
-
-      const trigger = await screen.findByRole("button", { name: "Hoàn tất tiếp nhận…" });
-      expect(trigger).toBeVisible();
-      expect(
-        screen.getByText(
-          "Danh sách khoảng trống chưa khả dụng: máy chủ chưa công bố hợp đồng API cho khoảng trống chứng cứ (kế hoạch Task 9).",
-        ),
-      ).toBeVisible();
-
-      fireEvent.click(trigger);
-
-      expect(await screen.findByRole("dialog")).toBeVisible();
-      expect(
-        screen.getByText(
-          "Hợp đồng API hoàn tất tiếp nhận chưa được công bố; thao tác sẽ khả dụng khi backend phát hành.",
-        ),
-      ).toBeVisible();
-      expect(screen.getByRole("button", { name: "Hoàn tất tiếp nhận" })).toBeDisabled();
-    });
-
-    it("lets the officer retry a failed case request", async () => {
-      const api = {
-        getCase: vi
-          .fn()
-          .mockRejectedValueOnce(new Error("offline"))
-          .mockResolvedValueOnce(creditCase(false)),
-      };
-
-      render(<GapWorkspace api={api} caseId="case-1" />);
-
-      fireEvent.click(await screen.findByRole("button", { name: "Thử tải lại" }));
-
-      await waitFor(() => expect(api.getCase).toHaveBeenCalledTimes(2));
-      expect(await screen.findByRole("heading", { name: "Khoảng trống chứng cứ" })).toBeVisible();
     });
   });
 });
@@ -503,13 +791,9 @@ describe("Gaps workspace", () => {
 describe("Handoff and audit", () => {
   function readyHandoff(overrides: Partial<HandoffView> = {}): HandoffView {
     return {
-      id: "handoff-1",
-      caseVersion: 3,
+      handoffId: "handoff-1",
       state: "READY_FOR_SPECIALIST_REVIEW",
-      stale: false,
-      confirmedFactCount: 5,
-      conflictCount: 2,
-      gapCount: 1,
+      caseVersion: 3,
       createdAt: "2026-07-17T08:00:00Z",
       ...overrides,
     };
@@ -524,38 +808,82 @@ describe("Handoff and audit", () => {
       actorId: "officer-synthetic-01",
       artifactType: "document",
       artifactId: "doc-abcdef1234567890",
+      eventData: {},
       createdAt: "2026-07-17T08:00:00Z",
       ...overrides,
     };
   }
 
+  function auditEvent(overrides: Partial<AuditEventDto> = {}): AuditEventDto {
+    return { ...makeEvent(), ...overrides };
+  }
+
   describe("HandoffSummary", () => {
-    it("labels handoff as not a credit decision", () => {
+    it("labels the handoff as not a credit decision", () => {
       render(<HandoffSummary handoff={readyHandoff()} />);
       expect(screen.getByText("Không phải quyết định tín dụng")).toBeVisible();
     });
 
-    it("shows the exact version line and counts for a ready handoff", () => {
-      render(<HandoffSummary handoff={readyHandoff({ caseVersion: 7 })} />);
+    it("shows the version line, state label, and handoff id", () => {
+      render(<HandoffSummary handoff={readyHandoff({ caseVersion: 7, handoffId: "handoff-77" })} />);
 
       expect(screen.getByText("Phiên bản hồ sơ: 7")).toBeVisible();
       expect(screen.getByText("Sẵn sàng cho chuyên viên thẩm định")).toBeVisible();
-      expect(screen.getByText("5")).toBeVisible();
-      expect(screen.getByText("2")).toBeVisible();
-      expect(screen.getByText("1")).toBeVisible();
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      expect(screen.queryByText("Đã lỗi thời")).not.toBeInTheDocument();
+      expect(screen.getByText(/handoff-77/)).toBeVisible();
     });
 
-    it("shows the stale warning and badge while still rendering the handoff", () => {
-      render(<HandoffSummary handoff={readyHandoff({ stale: true, caseVersion: 3 })} />);
+    it("fails closed on an unknown handoff state", () => {
+      render(<HandoffSummary handoff={readyHandoff({ state: "SOMETHING_NEW" })} />);
+      expect(screen.getByText("Trạng thái chưa được hỗ trợ")).toBeVisible();
+    });
+  });
 
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Gói bàn giao đã lỗi thời do hồ sơ thay đổi. Cần tạo lại sau khi xử lý thay đổi.",
-      );
-      expect(screen.getByText("Đã lỗi thời")).toBeVisible();
+  describe("HandoffWorkspace (ban-giao loader)", () => {
+    const creditCase: CreditCaseDto = {
+      id: "case-1",
+      version: 5,
+      assignedOfficerId: "officer-synthetic",
+      requestedAmount: "1000000000",
+      purpose: "Bổ sung vốn lưu động",
+      workflowState: "REVIEW",
+      updatedAt: "2026-07-17T08:00:00Z",
+      capabilities: { canUpload: true, canConfirm: true, canCompleteIntake: false },
+    };
+
+    it("loads the case and renders the current handoff", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(creditCase),
+        getHandoff: vi.fn().mockResolvedValue({
+          handoffId: "handoff-9",
+          state: "READY_FOR_SPECIALIST_REVIEW",
+          caseVersion: 5,
+          createdAt: "2026-07-17T08:00:00Z",
+        }),
+      };
+
+      render(<HandoffWorkspace api={api} caseId="case-1" />);
+
+      expect(
+        await screen.findByRole("heading", { name: "Gói bàn giao chuyên viên" }),
+      ).toBeVisible();
+      expect(screen.getByText(/handoff-9/)).toBeVisible();
+      expect(screen.getByText("Hồ sơ · phiên bản 5")).toBeVisible();
+    });
+
+    it("shows the honest empty state on a 404 HANDOFF_NOT_AVAILABLE", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(creditCase),
+        getHandoff: vi
+          .fn()
+          .mockRejectedValue(new ApiClientError(404, "HANDOFF_NOT_AVAILABLE", "", false)),
+      };
+
+      render(<HandoffWorkspace api={api} caseId="case-1" />);
+
+      expect(
+        await screen.findByText(/Chưa có gói bàn giao cho hồ sơ này\./),
+      ).toBeVisible();
       expect(screen.getByText("Không phải quyết định tín dụng")).toBeVisible();
-      expect(screen.getByText("Phiên bản hồ sơ: 3")).toBeVisible();
     });
   });
 
@@ -574,6 +902,20 @@ describe("Handoff and audit", () => {
       expect(items[0]).toHaveTextContent("Tác nhân: officer");
       expect(items[0]).toHaveTextContent("Đối tượng: document");
       expect(items[0]).toHaveTextContent("Phiên bản hồ sơ: 3");
+    });
+
+    it("renders eventData as escaped plain text, never as HTML", () => {
+      render(
+        <AuditTimeline
+          events={[makeEvent({ eventData: { note: "<b>tiêm</b>" } })]}
+          nextCursor={null}
+        />,
+      );
+
+      const item = screen.getByRole("listitem");
+      expect(item).toHaveTextContent("Chi tiết: note: <b>tiêm</b>");
+      // The angle-bracket content is text, not a real <b> element.
+      expect(item.querySelector("b")).toBeNull();
     });
 
     it("shows the load-more button and calls onLoadMore with the cursor", () => {
@@ -610,63 +952,61 @@ describe("Handoff and audit", () => {
     });
   });
 
-  // ban-giao route: the page is a thin server component delegating to the
-  // HandoffWorkspace client loader (same page/loader split as the doi-chieu and
-  // khoang-trong routes). The loader carries the contract-pending behavior, so
-  // it is exercised directly here, exactly like the EvidenceDashboard and
-  // GapWorkspace loader tests above.
-  describe("HandoffWorkspace (ban-giao loader)", () => {
-    it("loads the case and shows the contract-pending panel plus the non-decision note", async () => {
-      const creditCase: CreditCaseDto = {
-        id: "case-1",
-        version: 5,
-        assignedOfficerId: "officer-synthetic",
-        requestedAmount: "1000000000",
-        purpose: "Bổ sung vốn lưu động",
-        workflowState: "REVIEW",
-        updatedAt: "2026-07-17T08:00:00Z",
-        capabilities: { canUpload: true, canConfirm: true, canCompleteIntake: false },
-      };
-      const api = { getCase: vi.fn().mockResolvedValue(creditCase) };
-
-      render(<HandoffWorkspace api={api} caseId="case-1" />);
-
-      expect(
-        await screen.findByText(
-          "Gói bàn giao chưa khả dụng: máy chủ chưa công bố hợp đồng API bàn giao (kế hoạch Task 9).",
-        ),
-      ).toBeVisible();
-      expect(screen.getByText("Không phải quyết định tín dụng")).toBeVisible();
-      expect(screen.getByText("Hồ sơ · phiên bản 5")).toBeVisible();
-      expect(api.getCase).toHaveBeenCalledWith("case-1");
-    });
-  });
-
-  // nhat-ky route: same page/loader split as ban-giao; the AuditWorkspace client
-  // loader carries the contract-pending behavior and is exercised directly here.
   describe("AuditWorkspace (nhat-ky loader)", () => {
-    it("loads the case and shows the contract-pending panel", async () => {
-      const creditCase: CreditCaseDto = {
-        id: "case-1",
-        version: 5,
-        assignedOfficerId: "officer-synthetic",
-        requestedAmount: "1000000000",
-        purpose: "Bổ sung vốn lưu động",
-        workflowState: "REVIEW",
-        updatedAt: "2026-07-17T08:00:00Z",
-        capabilities: { canUpload: true, canConfirm: true, canCompleteIntake: false },
+    const creditCase: CreditCaseDto = {
+      id: "case-1",
+      version: 5,
+      assignedOfficerId: "officer-synthetic",
+      requestedAmount: "1000000000",
+      purpose: "Bổ sung vốn lưu động",
+      workflowState: "REVIEW",
+      updatedAt: "2026-07-17T08:00:00Z",
+      capabilities: { canUpload: true, canConfirm: true, canCompleteIntake: false },
+    };
+
+    it("loads the first page and appends the next page without duplicating events", async () => {
+      const api = {
+        getCase: vi.fn().mockResolvedValue(creditCase),
+        listAuditEvents: vi
+          .fn()
+          .mockResolvedValueOnce({
+            events: [
+              auditEvent({ id: "evt-1", eventType: "CASE_CREATED" }),
+              auditEvent({ id: "evt-2", eventType: "DOCUMENT_REGISTERED" }),
+            ],
+            nextCursor: "cursor-2",
+          })
+          .mockResolvedValueOnce({
+            events: [
+              // The window overlaps: evt-2 reappears and must not be duplicated.
+              auditEvent({ id: "evt-2", eventType: "DOCUMENT_REGISTERED" }),
+              auditEvent({ id: "evt-3", eventType: "DOCUMENT_CONFIRMED" }),
+            ],
+            nextCursor: null,
+          }),
       };
-      const api = { getCase: vi.fn().mockResolvedValue(creditCase) };
 
       render(<AuditWorkspace api={api} caseId="case-1" />);
 
+      expect(await screen.findByText("CASE_CREATED")).toBeVisible();
+      // Scope to the timeline list — CaseNav renders its own nav listitems.
+      const timeline = screen.getByRole("list", { name: "Nhật ký hồ sơ" });
+      expect(within(timeline).getAllByRole("listitem")).toHaveLength(2);
+
+      fireEvent.click(screen.getByRole("button", { name: "Tải thêm sự kiện" }));
+
+      await waitFor(() =>
+        expect(within(timeline).getAllByRole("listitem")).toHaveLength(3),
+      );
+      expect(screen.getByText("DOCUMENT_CONFIRMED")).toBeVisible();
+      // De-duplicated: exactly one DOCUMENT_REGISTERED entry despite the overlap.
+      expect(screen.getAllByText("DOCUMENT_REGISTERED")).toHaveLength(1);
+      // Last page reached — the load-more control is gone.
       expect(
-        await screen.findByText(
-          "Nhật ký chưa khả dụng: máy chủ chưa công bố hợp đồng API nhật ký (kế hoạch Task 9).",
-        ),
-      ).toBeVisible();
-      expect(screen.getByText("Hồ sơ · phiên bản 5")).toBeVisible();
-      expect(api.getCase).toHaveBeenCalledWith("case-1");
+        screen.queryByRole("button", { name: "Tải thêm sự kiện" }),
+      ).not.toBeInTheDocument();
+      expect(api.listAuditEvents).toHaveBeenCalledTimes(2);
+      expect(api.listAuditEvents).toHaveBeenNthCalledWith(2, "case-1", "cursor-2", 50);
     });
   });
 });

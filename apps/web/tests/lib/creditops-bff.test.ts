@@ -746,3 +746,268 @@ describe("browser CreditOps client", () => {
     );
   });
 });
+
+const GAP_COOKIES = `${SESSION_COOKIE_NAME}=workforce-token; ${CSRF_COOKIE_NAME}=csrf-value`;
+const ITEM_1 = "11111111-1111-4111-8111-111111111111";
+const ITEM_2 = "22222222-2222-4222-8222-222222222222";
+
+function jsonMutation(path: string, body: unknown) {
+  return request(
+    path,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://app.invalid",
+        [CSRF_HEADER_NAME]: "csrf-value",
+      },
+      body: JSON.stringify(body),
+    },
+    GAP_COOKIES,
+  );
+}
+
+describe("CreditOps gap-request / intake / handoff / audit routes", () => {
+  it("forwards the allowlisted gap-request batch GET", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ batch: {} }, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/gap-request-batches"),
+      ["api", "v1", "cases", "case-1", "gap-request-batches"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      "https://creditops-api.invalid/api/v1/cases/case-1/gap-request-batches",
+    );
+  });
+
+  it("rejects query parameters on the gap-request batch GET", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/gap-request-batches?cursor=x"),
+      ["api", "v1", "cases", "case-1", "gap-request-batches"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("forwards the assemble-or-get POST with an exactly-empty body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ batchId: "b1" }, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      jsonMutation("/api/v1/cases/case-1/gap-request-batches", {}),
+      ["api", "v1", "cases", "case-1", "gap-request-batches"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe("{}");
+  });
+
+  it("rejects a non-empty assemble-or-get POST body", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      jsonMutation("/api/v1/cases/case-1/gap-request-batches", { extra: true }),
+      ["api", "v1", "cases", "case-1", "gap-request-batches"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("validates and reconstructs a REJECTED disposition (no maps)", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      jsonMutation(`/api/v1/cases/case-1/gap-request-batches/batch-1/disposition`, {
+        dispositionType: "REJECTED",
+        rationale: "  Không phù hợp, từ chối đợt yêu cầu.  ",
+      }),
+      ["api", "v1", "cases", "case-1", "gap-request-batches", "batch-1", "disposition"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        dispositionType: "REJECTED",
+        rationale: "Không phù hợp, từ chối đợt yêu cầu.",
+      }),
+    );
+  });
+
+  it("validates and reconstructs an APPROVED_WITH_CHANGES disposition with nested maps", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      jsonMutation(`/api/v1/cases/case-1/gap-request-batches/batch-1/disposition`, {
+        dispositionType: "APPROVED_WITH_CHANGES",
+        rationale: "Giữ một mục, chỉnh một mục.",
+        itemDispositions: { [ITEM_1]: "APPROVED", [ITEM_2]: "EDITED" },
+        editedTexts: { [ITEM_2]: "  Nội dung yêu cầu đã chỉnh sửa.  " },
+      }),
+      ["api", "v1", "cases", "case-1", "gap-request-batches", "batch-1", "disposition"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        dispositionType: "APPROVED_WITH_CHANGES",
+        rationale: "Giữ một mục, chỉnh một mục.",
+        itemDispositions: { [ITEM_1]: "APPROVED", [ITEM_2]: "EDITED" },
+        editedTexts: { [ITEM_2]: "Nội dung yêu cầu đã chỉnh sửa." },
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "unknown disposition type",
+      body: { dispositionType: "APPROVED_MAYBE", rationale: "x" },
+    },
+    {
+      name: "missing rationale",
+      body: { dispositionType: "APPROVED_ALL" },
+    },
+    {
+      name: "extra top-level key",
+      body: { dispositionType: "APPROVED_ALL", rationale: "x", note: "y" },
+    },
+    {
+      name: "non-uuid item key",
+      body: {
+        dispositionType: "APPROVED_WITH_CHANGES",
+        rationale: "x",
+        itemDispositions: { "not-a-uuid": "APPROVED" },
+      },
+    },
+    {
+      name: "unknown item disposition value",
+      body: {
+        dispositionType: "APPROVED_WITH_CHANGES",
+        rationale: "x",
+        itemDispositions: { [ITEM_1]: "MAYBE" },
+      },
+    },
+    {
+      name: "non-record itemDispositions",
+      body: {
+        dispositionType: "APPROVED_WITH_CHANGES",
+        rationale: "x",
+        itemDispositions: [ITEM_1],
+      },
+    },
+    {
+      name: "non-uuid edited-text key",
+      body: {
+        dispositionType: "APPROVED_WITH_CHANGES",
+        rationale: "x",
+        itemDispositions: { [ITEM_1]: "EDITED" },
+        editedTexts: { "not-a-uuid": "text" },
+      },
+    },
+    {
+      name: "document-bytes rationale",
+      body: { dispositionType: "REJECTED", rationale: `JVBERi0${"A".repeat(80)}` },
+    },
+  ])("rejects an invalid gap disposition body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      jsonMutation(`/api/v1/cases/case-1/gap-request-batches/batch-1/disposition`, body),
+      ["api", "v1", "cases", "case-1", "gap-request-batches", "batch-1", "disposition"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("forwards the intake-completion POST with an exactly-empty body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ handoffId: "h1" }, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      jsonMutation("/api/v1/cases/case-1/intake-completion", {}),
+      ["api", "v1", "cases", "case-1", "intake-completion"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe("{}");
+  });
+
+  it("rejects a non-empty intake-completion POST body", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      jsonMutation("/api/v1/cases/case-1/intake-completion", { force: true }),
+      ["api", "v1", "cases", "case-1", "intake-completion"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("forwards the handoffs GET and rejects a query on it", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ handoffId: "h1" }, { status: 200 }));
+    const ok = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/handoffs"),
+      ["api", "v1", "cases", "case-1", "handoffs"],
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+
+    const rejected = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/handoffs?limit=5"),
+      ["api", "v1", "cases", "case-1", "handoffs"],
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(400);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards the audit-events GET and reconstructs its cursor/limit query", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      Response.json({ events: [], nextCursor: null }, { status: 200 }),
+    );
+    const cursor = "123e4567-e89b-12d3-a456-426614174000";
+    const response = await proxyCreditOpsRequest(
+      request(`/api/v1/cases/case-1/audit-events?limit=25&cursor=${cursor}`),
+      ["api", "v1", "cases", "case-1", "audit-events"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      `https://creditops-api.invalid/api/v1/cases/case-1/audit-events?cursor=${cursor}&limit=25`,
+    );
+  });
+
+  it.each([
+    "/api/v1/cases/case-1/audit-events?cursor=not-a-uuid",
+    "/api/v1/cases/case-1/audit-events?limit=0",
+    "/api/v1/cases/case-1/audit-events?foo=bar",
+  ])("rejects an invalid audit-events query: %s", async (path) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      request(path),
+      ["api", "v1", "cases", "case-1", "audit-events"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps the audit-events POST closed (read-only route)", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      jsonMutation("/api/v1/cases/case-1/audit-events", {}),
+      ["api", "v1", "cases", "case-1", "audit-events"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(404);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});

@@ -194,11 +194,9 @@ function validateAndReconstructSearch(
   parameters: URLSearchParams,
 ): string | null {
   const entries = [...parameters.entries()];
-  const isCaseList =
-    method === "GET" &&
-    segments.length === 3 &&
-    segments.join("/") === "api/v1/cases";
-  if (!isCaseList) return entries.length === 0 ? "" : null;
+  if (!isCursorPaginatedListRoute(method, segments)) {
+    return entries.length === 0 ? "" : null;
+  }
 
   if (entries.some(([name]) => name !== "cursor" && name !== "limit")) {
     return null;
@@ -217,6 +215,18 @@ function validateAndReconstructSearch(
   if (limit !== null) canonical.set("limit", String(Number(limit)));
   const query = canonical.toString();
   return query ? `?${query}` : "";
+}
+
+// The only two GET routes that accept cursor pagination: the case list and the
+// per-case audit-event timeline. Both take the same {cursor?: UUID, limit?}
+// pair; every other route rejects any query string.
+function isCursorPaginatedListRoute(method: string, segments: string[]): boolean {
+  if (method !== "GET") return false;
+  const path = `/${segments.join("/")}`;
+  return (
+    path === "/api/v1/cases" ||
+    /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/audit-events$/.test(path)
+  );
 }
 
 function validLimit(value: string): boolean {
@@ -355,6 +365,16 @@ function validateAndReconstructMutation(
     return hasExactKeys(value, []) ? {} : null;
   }
 
+  // Assemble-or-get the gap-request batch, and complete intake, both take an
+  // exactly-empty JSON body (the backend endpoints declare no request model).
+  if (isGapRequestBatchAssemble(segments) || isIntakeCompletion(segments)) {
+    return hasExactKeys(value, []) ? {} : null;
+  }
+
+  if (isGapRequestDisposition(segments)) {
+    return canonicalizeGapRequestDisposition(value);
+  }
+
   if (isRiskReviewDisposition(segments)) {
     return canonicalizeRiskDisposition(value);
   }
@@ -423,6 +443,99 @@ function canonicalizeCreditOpsAuthorization(
   const rationale = normalizedString(value.rationale, 1, 4000);
   if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
   return { rationale };
+}
+
+function isGapRequestBatchAssemble(segments: string[]): boolean {
+  const path = `/${segments.join("/")}`;
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/gap-request-batches$/.test(path);
+}
+
+function isGapRequestDisposition(segments: string[]): boolean {
+  const path = `/${segments.join("/")}`;
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/gap-request-batches\/[A-Za-z0-9_-]+\/disposition$/.test(
+    path,
+  );
+}
+
+function isIntakeCompletion(segments: string[]): boolean {
+  const path = `/${segments.join("/")}`;
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/intake-completion$/.test(path);
+}
+
+// Closed enums mirrored from services/.../domain/gap_request_batches.py.
+const BATCH_DISPOSITION_TYPES = new Set([
+  "APPROVED_ALL",
+  "APPROVED_WITH_CHANGES",
+  "REJECTED",
+  "NO_OUTBOUND_REQUESTS",
+]);
+const ITEM_DISPOSITIONS = new Set(["APPROVED", "REMOVED", "EDITED"]);
+const MAX_GAP_ITEM_ENTRIES = 500;
+const MAX_EDITED_TEXT = 2000;
+
+// Mirrors backend RecordBatchDispositionRequest (gap_requests.py, extra=forbid):
+// {dispositionType, rationale} are required; {itemDispositions, editedTexts} are
+// optional maps whose keys are batch-item UUIDs and whose values come from the
+// closed enums (item dispositions) or are plain replacement text (edited texts).
+function canonicalizeGapRequestDisposition(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const keys = Object.keys(value);
+  const allowed = new Set(["dispositionType", "rationale", "itemDispositions", "editedTexts"]);
+  if (keys.some((key) => !allowed.has(key))) return null;
+  if (!("dispositionType" in value) || !("rationale" in value)) return null;
+
+  const dispositionType = normalizedString(value.dispositionType, 1, 50);
+  if (dispositionType === null || !BATCH_DISPOSITION_TYPES.has(dispositionType)) {
+    return null;
+  }
+  const rationale = normalizedString(value.rationale, 1, 4000);
+  if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+
+  const canonical: Record<string, unknown> = { dispositionType, rationale };
+
+  if ("itemDispositions" in value) {
+    const itemDispositions = canonicalizeUuidMap(value.itemDispositions, (entryValue) =>
+      typeof entryValue === "string" && ITEM_DISPOSITIONS.has(entryValue) ? entryValue : null,
+    );
+    if (itemDispositions === null) return null;
+    canonical.itemDispositions = itemDispositions;
+  }
+
+  if ("editedTexts" in value) {
+    const editedTexts = canonicalizeUuidMap(value.editedTexts, (entryValue) => {
+      const text = normalizedString(entryValue, 1, MAX_EDITED_TEXT);
+      return text !== null && !looksLikeDocumentBytes(text) ? text : null;
+    });
+    if (editedTexts === null) return null;
+    canonical.editedTexts = editedTexts;
+  }
+
+  return canonical;
+}
+
+// Reconstructs a {uuid: value} map field-by-field: every key must be a UUID
+// (lower-cased so two spellings can never collide into one backend key), and
+// every value must pass the caller's closed-enum / text validator.
+function canonicalizeUuidMap(
+  value: unknown,
+  validateValue: (entryValue: unknown) => string | null,
+): Record<string, string> | null {
+  if (!isPlainRecord(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_GAP_ITEM_ENTRIES) return null;
+  const canonical: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const [rawKey, rawValue] of entries) {
+    if (!UUID.test(rawKey)) return null;
+    const key = rawKey.toLowerCase();
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const validated = validateValue(rawValue);
+    if (validated === null) return null;
+    canonical[key] = validated;
+  }
+  return canonical;
 }
 
 function isConfirmationSubmission(segments: string[]): boolean {
@@ -610,7 +723,19 @@ function allowlisted(method: string, segments: string[]): boolean {
     (method === "POST" &&
       /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/credit-ops\/document-requests\/[A-Za-z0-9_-]+\/approve$/.test(
         path,
-      ))
+      )) ||
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/gap-request-batches$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/gap-request-batches$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/gap-request-batches\/[A-Za-z0-9_-]+\/disposition$/.test(
+        path,
+      )) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/intake-completion$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/handoffs$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/audit-events$/.test(path))
   );
 }
 

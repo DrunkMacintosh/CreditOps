@@ -1,4 +1,5 @@
 import type {
+  AuditEventListDto,
   CompleteUploadResponseDto,
   ConfirmDocumentRequestDto,
   ConflictListDto,
@@ -9,16 +10,21 @@ import type {
   CreditOpsApi,
   DocumentReviewDto,
   EvidenceListDto,
+  HandoffDto,
+  IntakeCompletionResultDto,
   UploadIntentDto,
 } from "./contracts";
 import {
   parseApiError,
+  parseAuditEventList,
   parseCompleteUpload,
   parseConflictList,
   parseCreditCase,
   parseCreditCaseList,
   parseDocumentReview,
   parseEvidenceList,
+  parseHandoff,
+  parseIntakeCompletion,
   parseUploadIntent,
 } from "./schemas";
 
@@ -36,10 +42,25 @@ export class ApiClientError extends Error {
     message: string,
     public readonly retryable: boolean,
     public readonly retryAfterSeconds: number | null = null,
+    // Structured machine-readable context forwarded verbatim from the API error
+    // body (e.g. 409 INTAKE_INCOMPLETE carries {reasons, unresolvedCount}).
+    public readonly details: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = "ApiClientError";
   }
+}
+
+// The unresolved-completeness reasons carried by a 409 INTAKE_INCOMPLETE, or
+// null when the error is anything else. Reasons are the domain validator's own
+// verdict; render them as the unresolved-items list.
+export function getIntakeIncompleteReasons(error: unknown): string[] | null {
+  if (!(error instanceof ApiClientError) || error.code !== "INTAKE_INCOMPLETE") {
+    return null;
+  }
+  const reasons = error.details?.reasons;
+  if (!Array.isArray(reasons)) return [];
+  return reasons.filter((reason): reason is string => typeof reason === "string");
 }
 
 export function getVietnameseApiError(error: unknown): string {
@@ -180,6 +201,40 @@ export class CreditOpsApiClient implements CreditOpsApi {
     );
   }
 
+  // Completes assigned intake with an EMPTY body. On success returns the
+  // handoff (201 created, or 200 idempotent repeat with created=false). A 409
+  // INTAKE_INCOMPLETE throws with details.reasons — never treated as success.
+  async completeIntake(caseId: string): Promise<IntakeCompletionResultDto> {
+    return parseIntakeCompletion(
+      await this.request(
+        `/api/v1/cases/${encodeURIComponent(caseId)}/intake-completion`,
+        { method: "POST", body: "{}" },
+      ),
+    );
+  }
+
+  async getHandoff(caseId: string): Promise<HandoffDto> {
+    return parseHandoff(
+      await this.request(`/api/v1/cases/${encodeURIComponent(caseId)}/handoffs`),
+    );
+  }
+
+  async listAuditEvents(
+    caseId: string,
+    cursor?: string | null,
+    limit?: number,
+  ): Promise<AuditEventListDto> {
+    const query = new URLSearchParams();
+    if (cursor) query.set("cursor", cursor);
+    if (limit !== undefined) query.set("limit", String(limit));
+    const suffix = query.toString();
+    return parseAuditEventList(
+      await this.request(
+        `/api/v1/cases/${encodeURIComponent(caseId)}/audit-events${suffix ? `?${suffix}` : ""}`,
+      ),
+    );
+  }
+
   // Callers that need the raw HTTP status alongside the parsed body (for
   // example to detect a 202 Accepted queued/running response) can use this
   // instead of the narrower typed methods above, which only ever surface the
@@ -224,6 +279,7 @@ export class CreditOpsApiClient implements CreditOpsApi {
         apiError?.messageVi || "Yêu cầu không thành công.",
         apiError?.retryable ?? response.status >= 500,
         response.status === 429 ? parseRetryAfterSeconds(response) : null,
+        parseErrorDetails(body),
       );
     }
     return { status: response.status, body };
@@ -257,6 +313,15 @@ function parseRetryAfterSeconds(response: Response): number | null {
   const trimmed = header.trim();
   if (!/^\d+$/.test(trimmed)) return null;
   return Number.parseInt(trimmed, 10);
+}
+
+function parseErrorDetails(body: unknown): Record<string, unknown> | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const details = (body as Record<string, unknown>).details;
+  if (typeof details !== "object" || details === null || Array.isArray(details)) {
+    return null;
+  }
+  return details as Record<string, unknown>;
 }
 
 async function parseJson(response: Response): Promise<unknown> {
