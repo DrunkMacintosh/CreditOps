@@ -33,6 +33,7 @@ DOC_VERSION_ID = UUID("21000000-0000-0000-0000-000000000004")
 CANDIDATE = UUID("22000000-0000-0000-0000-000000000004")
 CONFIRMATION = UUID("23000000-0000-0000-0000-000000000004")
 CONFIRMED_FACT = UUID("24000000-0000-0000-0000-000000000004")
+PAGE_REGION = UUID("25000000-0000-0000-0000-000000000004")
 OFFICER = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 READY = "READY_FOR_OFFICER_REVIEW"
 NOW = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
@@ -124,7 +125,11 @@ async def test_confirmation_batch_is_one_transaction_and_derives_and_audits() ->
         results=[
             [(CASE, CASE_VERSION, READY, None)],  # version lock, not stale
             [(CONFIRMATION,)],  # fact_confirmations insert returning id
-            [(CONFIRMED_FACT,)],  # confirmed_facts insert returning id
+            # confirmed_facts insert returning id + derived FK targets
+            [(CONFIRMED_FACT, CANDIDATE, PAGE_REGION, DOC_VERSION_ID)],
+            [],  # DERIVED_FROM_CANDIDATE edge
+            [],  # LOCATED_IN_REGION edge
+            [],  # SOURCED_FROM_DOCUMENT_VERSION edge
             [],  # audit insert (no returning)
         ]
     )
@@ -214,8 +219,11 @@ async def test_corrected_confirmation_binds_corrected_value_and_derives_fact() -
         results=[
             [(CASE, CASE_VERSION, READY, None)],
             [(CONFIRMATION,)],
-            [(CONFIRMED_FACT,)],
-            [],
+            [(CONFIRMED_FACT, CANDIDATE, PAGE_REGION, DOC_VERSION_ID)],
+            [],  # DERIVED_FROM_CANDIDATE edge
+            [],  # LOCATED_IN_REGION edge
+            [],  # SOURCED_FROM_DOCUMENT_VERSION edge
+            [],  # audit insert
         ]
     )
     repo = _repo(connection)
@@ -323,6 +331,116 @@ async def test_missing_version_fails_closed() -> None:
             actor_id=OFFICER,
             expected_document_stage=DocumentStage.READY_FOR_OFFICER_REVIEW,
         )
+
+
+# --- typed evidence edges --------------------------------------------------
+
+
+def _edge_params(connection: Connection) -> list[tuple[object, ...]]:
+    return [
+        params
+        for query, params in zip(connection.queries, connection.params, strict=True)
+        if "insert into public.evidence_edges" in query.lower() and params is not None
+    ]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_emits_allowlisted_typed_lineage_edges_idempotently() -> None:
+    connection = Connection(
+        results=[
+            [(CASE, CASE_VERSION, READY, None)],  # version lock
+            [(CONFIRMATION,)],  # fact_confirmations insert
+            [(CONFIRMED_FACT, CANDIDATE, PAGE_REGION, DOC_VERSION_ID)],  # confirmed_facts
+            [],  # DERIVED_FROM_CANDIDATE edge
+            [],  # LOCATED_IN_REGION edge
+            [],  # SOURCED_FROM_DOCUMENT_VERSION edge
+            [],  # audit insert
+        ]
+    )
+    repo = _repo(connection)
+
+    await repo.record_confirmations(
+        document_version_id=DOC_VERSION_ID,
+        confirmations=(_accepted(),),
+        actor_id=OFFICER,
+        expected_document_stage=DocumentStage.READY_FOR_OFFICER_REVIEW,
+    )
+
+    sql = _sql(connection)
+    assert "insert into public.evidence_edges" in sql
+    # Idempotent on repeat via the pre-existing unique typed-edge constraint.
+    assert "on conflict on constraint evidence_edges_unique_typed_edge" in sql
+    assert "do nothing" in sql
+
+    edge_params = _edge_params(connection)
+    # Exactly the three allowlisted lineage edges, once each.
+    assert len(edge_params) == 3
+    triples = {(params[3], params[4], params[6]) for params in edge_params}
+    assert triples == {
+        ("DERIVED_FROM_CANDIDATE", "CONFIRMED_FACT", "CANDIDATE_FACT"),
+        ("LOCATED_IN_REGION", "CONFIRMED_FACT", "PAGE_REGION"),
+        ("SOURCED_FROM_DOCUMENT_VERSION", "CONFIRMED_FACT", "DOCUMENT_VERSION"),
+    }
+    # Every edge is bound to the confirmed fact source and its real FK targets,
+    # all sharing the single case_id + case_version (no cross-case edge).
+    targets_by_type = {params[6]: params[7] for params in edge_params}
+    assert targets_by_type == {
+        "CANDIDATE_FACT": CANDIDATE,
+        "PAGE_REGION": PAGE_REGION,
+        "DOCUMENT_VERSION": DOC_VERSION_ID,
+    }
+    for params in edge_params:
+        assert params[1] == CASE  # case_id
+        assert params[2] == CASE_VERSION  # case_version
+        assert params[5] == CONFIRMED_FACT  # source_entity_id
+
+
+@pytest.mark.asyncio
+async def test_repeat_confirmation_derives_nothing_and_writes_no_edges() -> None:
+    connection = Connection(
+        results=[
+            [(CASE, CASE_VERSION, READY, None)],  # version lock
+            [],  # fact_confirmations insert -> conflict
+            [(CONFIRMATION,)],  # reselect existing confirmation id
+        ]
+    )
+    repo = _repo(connection)
+
+    await repo.record_confirmations(
+        document_version_id=DOC_VERSION_ID,
+        confirmations=(_accepted(),),
+        actor_id=OFFICER,
+        expected_document_stage=DocumentStage.READY_FOR_OFFICER_REVIEW,
+    )
+
+    sql = _sql(connection)
+    # A duplicate submission re-derives no fact and therefore writes no edges.
+    assert "insert into public.confirmed_facts" not in sql
+    assert "insert into public.evidence_edges" not in sql
+
+
+@pytest.mark.asyncio
+async def test_absent_disposition_writes_no_edges() -> None:
+    connection = Connection(
+        results=[
+            [(CASE, CASE_VERSION, READY, None)],
+            [(CONFIRMATION,)],  # fact_confirmations insert
+            [],  # audit insert
+        ]
+    )
+    repo = _repo(connection)
+
+    await repo.record_confirmations(
+        document_version_id=DOC_VERSION_ID,
+        confirmations=(
+            ConfirmationInput(candidate_id=CANDIDATE, disposition=FactDisposition.ABSENT),
+        ),
+        actor_id=OFFICER,
+        expected_document_stage=DocumentStage.READY_FOR_OFFICER_REVIEW,
+    )
+
+    # ABSENT asserts no value, derives no confirmed fact, and so seeds no lineage.
+    assert "insert into public.evidence_edges" not in _sql(connection)
 
 
 # --- reads -----------------------------------------------------------------

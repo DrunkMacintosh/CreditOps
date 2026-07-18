@@ -16,6 +16,7 @@ satisfy a gate, resolve a conflict/gap, or record a credit decision.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import cast
 from uuid import UUID, uuid4
@@ -34,7 +35,14 @@ from creditops.application.ports.evidence_review import (
 )
 from creditops.application.use_cases.create_case import INTAKE_OFFICER_ROLE
 from creditops.domain.enums import DocumentStage, FactDisposition
-from creditops.domain.evidence import FactValue, PageRegion
+from creditops.domain.evidence import (
+    EvidenceEdge,
+    EvidenceEdgeType,
+    EvidenceEntityType,
+    EvidenceNodeRef,
+    FactValue,
+    PageRegion,
+)
 from creditops.infrastructure.postgres.orchestration import ConnectionFactory
 from creditops.infrastructure.postgres.repositories import DatabaseConnection
 
@@ -52,6 +60,21 @@ _CONFIRMATION_ARTIFACT_TYPE = "FACT_CONFIRMATION"
 _DERIVES_CONFIRMED_FACT = frozenset(
     {FactDisposition.ACCEPTED, FactDisposition.CORRECTED}
 )
+
+
+@dataclass(frozen=True)
+class _DerivedConfirmedFact:
+    """The DB-derived identity + FK targets of a freshly confirmed fact.
+
+    ``page_region_id``/``document_version_id`` are read from the post-trigger
+    RETURNING (the trigger fills them from the candidate), so the lineage edges
+    bind the authoritative targets rather than any caller-supplied value.
+    """
+
+    confirmed_fact_id: UUID
+    candidate_id: UUID
+    page_region_id: UUID
+    document_version_id: UUID
 
 
 class PostgresEvidenceReviewRepository:
@@ -198,13 +221,19 @@ class PostgresEvidenceReviewRepository:
                     if not created:
                         continue
                     if confirmation.disposition in _DERIVES_CONFIRMED_FACT:
-                        confirmed_fact_id = await self._derive_confirmed_fact(
+                        derived = await self._derive_confirmed_fact(
                             connection,
                             candidate_id=confirmation.candidate_id,
                             confirmation_id=confirmation_id,
                         )
-                        if confirmed_fact_id is not None:
-                            confirmed_fact_ids.append(confirmed_fact_id)
+                        if derived is not None:
+                            confirmed_fact_ids.append(derived.confirmed_fact_id)
+                            await self._write_evidence_edges(
+                                connection,
+                                case_id=case_id,
+                                case_version=case_version,
+                                derived=derived,
+                            )
                     await self._append_confirmation_audit(
                         connection,
                         case_id=case_id,
@@ -283,21 +312,104 @@ class PostgresEvidenceReviewRepository:
         *,
         candidate_id: UUID,
         confirmation_id: UUID,
-    ) -> UUID | None:
+    ) -> _DerivedConfirmedFact | None:
         # The ``derive_and_protect_confirmed_fact`` BEFORE INSERT trigger fills
         # every authoritative field from the candidate + confirmation; we supply
-        # only the identity so no caller value can drift.
+        # only the identity so no caller value can drift.  The RETURNING reflects
+        # the post-trigger row, so ``page_region_id``/``document_version_id`` are
+        # the DB-derived FK targets we thread into the lineage edges below.
         cursor = await connection.execute(
             """
             insert into public.confirmed_facts (id, candidate_fact_id, confirmation_id)
             values (%s, %s, %s)
             on conflict (confirmation_id) do nothing
-            returning id
+            returning id, candidate_fact_id, page_region_id, document_version_id
             """,
             (uuid4(), candidate_id, confirmation_id),
         )
         row = await cursor.fetchone()
-        return cast(UUID, row[0]) if row is not None else None
+        if row is None:
+            return None
+        return _DerivedConfirmedFact(
+            confirmed_fact_id=cast(UUID, row[0]),
+            candidate_id=cast(UUID, row[1]),
+            page_region_id=cast(UUID, row[2]),
+            document_version_id=cast(UUID, row[3]),
+        )
+
+    async def _write_evidence_edges(
+        self,
+        connection: DatabaseConnection,
+        *,
+        case_id: UUID,
+        case_version: int,
+        derived: _DerivedConfirmedFact,
+    ) -> None:
+        # Deterministic, non-model lineage: a confirmed fact points back at the
+        # exact evidence it was derived from.  Every edge is allowlisted +
+        # case-scoped by ``EvidenceEdge.lineage`` (fail closed on any other
+        # shape) and written idempotently via the existing unique constraint, in
+        # THIS confirmation transaction.  Superseded history is never touched.
+        confirmed_fact = EvidenceNodeRef(
+            case_id=case_id,
+            case_version=case_version,
+            entity_type=EvidenceEntityType.CONFIRMED_FACT,
+            entity_id=derived.confirmed_fact_id,
+        )
+        edges = (
+            EvidenceEdge.lineage(
+                edge_type=EvidenceEdgeType.DERIVED_FROM_CANDIDATE,
+                source=confirmed_fact,
+                target=EvidenceNodeRef(
+                    case_id=case_id,
+                    case_version=case_version,
+                    entity_type=EvidenceEntityType.CANDIDATE_FACT,
+                    entity_id=derived.candidate_id,
+                ),
+            ),
+            EvidenceEdge.lineage(
+                edge_type=EvidenceEdgeType.LOCATED_IN_REGION,
+                source=confirmed_fact,
+                target=EvidenceNodeRef(
+                    case_id=case_id,
+                    case_version=case_version,
+                    entity_type=EvidenceEntityType.PAGE_REGION,
+                    entity_id=derived.page_region_id,
+                ),
+            ),
+            EvidenceEdge.lineage(
+                edge_type=EvidenceEdgeType.SOURCED_FROM_DOCUMENT_VERSION,
+                source=confirmed_fact,
+                target=EvidenceNodeRef(
+                    case_id=case_id,
+                    case_version=case_version,
+                    entity_type=EvidenceEntityType.DOCUMENT_VERSION,
+                    entity_id=derived.document_version_id,
+                ),
+            ),
+        )
+        for edge in edges:
+            await connection.execute(
+                """
+                insert into public.evidence_edges (
+                  id, case_id, case_version, edge_type,
+                  source_entity_type, source_entity_id,
+                  target_entity_type, target_entity_id
+                ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+                on conflict on constraint evidence_edges_unique_typed_edge
+                do nothing
+                """,
+                (
+                    uuid4(),
+                    edge.case_id,
+                    edge.case_version,
+                    edge.edge_type.value,
+                    edge.source_entity_type.value,
+                    edge.source_entity_id,
+                    edge.target_entity_type.value,
+                    edge.target_entity_id,
+                ),
+            )
 
     async def _append_confirmation_audit(
         self,

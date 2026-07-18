@@ -1,5 +1,7 @@
 from datetime import datetime
+from enum import StrEnum
 from typing import Self
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -143,4 +145,131 @@ class ConfirmedFact(BaseModel):
             source=candidate.source,
             authority=confirmation.authority,
             confirmed_at=confirmation.confirmed_at,
+        )
+
+
+class EvidenceEntityType(StrEnum):
+    """The typed nodes the Case Evidence Graph lineage chain connects.
+
+    The string values match the ``entity_type`` vocabulary the graph traversal
+    (``infrastructure/postgres/retrieval.traverse_evidence_graph``) already
+    speaks; nothing outside this closed set may appear on an edge.
+    """
+
+    CONFIRMED_FACT = "CONFIRMED_FACT"
+    CANDIDATE_FACT = "CANDIDATE_FACT"
+    PAGE_REGION = "PAGE_REGION"
+    DOCUMENT_VERSION = "DOCUMENT_VERSION"
+
+
+class EvidenceEdgeType(StrEnum):
+    """The deterministic lineage edges materialised at fact confirmation.
+
+    A confirmed fact points back at the exact evidence it was derived from --
+    its candidate, the page region it was located in, and the document version
+    it was sourced from.  These are the ONLY edge types this slice writes.
+    """
+
+    DERIVED_FROM_CANDIDATE = "DERIVED_FROM_CANDIDATE"
+    LOCATED_IN_REGION = "LOCATED_IN_REGION"
+    SOURCED_FROM_DOCUMENT_VERSION = "SOURCED_FROM_DOCUMENT_VERSION"
+
+
+#: The closed allowlist of ``(edge_type, source_entity_type, target_entity_type)``
+#: triples that may ever be persisted.  Any other combination is rejected (fail
+#: closed): the writer never invents a typed edge outside this set.
+_ALLOWED_EVIDENCE_EDGES: frozenset[
+    tuple[EvidenceEdgeType, EvidenceEntityType, EvidenceEntityType]
+] = frozenset(
+    {
+        (
+            EvidenceEdgeType.DERIVED_FROM_CANDIDATE,
+            EvidenceEntityType.CONFIRMED_FACT,
+            EvidenceEntityType.CANDIDATE_FACT,
+        ),
+        (
+            EvidenceEdgeType.LOCATED_IN_REGION,
+            EvidenceEntityType.CONFIRMED_FACT,
+            EvidenceEntityType.PAGE_REGION,
+        ),
+        (
+            EvidenceEdgeType.SOURCED_FROM_DOCUMENT_VERSION,
+            EvidenceEntityType.CONFIRMED_FACT,
+            EvidenceEntityType.DOCUMENT_VERSION,
+        ),
+    }
+)
+
+
+class EvidenceNodeRef(BaseModel):
+    """One typed, case+version-scoped node an evidence edge connects."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case_id: CaseId
+    case_version: int = Field(ge=1)
+    entity_type: EvidenceEntityType
+    entity_id: UUID
+
+
+class EvidenceEdge(BaseModel):
+    """A typed, immutable lineage edge in the Case Evidence Graph.
+
+    An edge is only valid if its ``(edge_type, source_entity_type,
+    target_entity_type)`` triple is allowlisted; both endpoints share the edge's
+    single ``case_id`` + ``case_version`` (there is no cross-case edge).  The
+    unique typed-edge constraint (``evidence_edges_unique_typed_edge``) makes
+    persistence idempotent.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case_id: CaseId
+    case_version: int = Field(ge=1)
+    edge_type: EvidenceEdgeType
+    source_entity_type: EvidenceEntityType
+    source_entity_id: UUID
+    target_entity_type: EvidenceEntityType
+    target_entity_id: UUID
+
+    @model_validator(mode="after")
+    def edge_is_allowlisted(self) -> Self:
+        triple = (
+            self.edge_type,
+            self.source_entity_type,
+            self.target_entity_type,
+        )
+        if triple not in _ALLOWED_EVIDENCE_EDGES:
+            raise ValueError(f"evidence edge {triple} is not allowlisted")
+        return self
+
+    @classmethod
+    def lineage(
+        cls,
+        *,
+        edge_type: EvidenceEdgeType,
+        source: EvidenceNodeRef,
+        target: EvidenceNodeRef,
+    ) -> Self:
+        """Build one allowlisted lineage edge, guarding against a cross-case edge.
+
+        The source and target MUST belong to the same ``case_id`` and
+        ``case_version``; the shared scope is bound onto the edge so no caller
+        can span two cases.  The allowlist is enforced by ``edge_is_allowlisted``.
+        """
+
+        if source.case_id != target.case_id:
+            raise ValueError("evidence edge endpoints must share the same case_id")
+        if source.case_version != target.case_version:
+            raise ValueError(
+                "evidence edge endpoints must share the same case_version"
+            )
+        return cls(
+            case_id=source.case_id,
+            case_version=source.case_version,
+            edge_type=edge_type,
+            source_entity_type=source.entity_type,
+            source_entity_id=source.entity_id,
+            target_entity_type=target.entity_type,
+            target_entity_id=target.entity_id,
         )

@@ -9,6 +9,10 @@ from creditops.domain.evidence import (
     CandidateFact,
     ConfirmationAuthority,
     ConfirmedFact,
+    EvidenceEdge,
+    EvidenceEdgeType,
+    EvidenceEntityType,
+    EvidenceNodeRef,
     FactConfirmation,
     PageRegion,
 )
@@ -298,3 +302,88 @@ def test_evidence_models_are_immutable() -> None:
         candidate.field_key = "mutated"
     with pytest.raises(ValidationError, match="frozen"):
         authority.source = "mutated"
+
+
+# --- evidence edges --------------------------------------------------------
+
+
+def _node(
+    entity_type: EvidenceEntityType,
+    *,
+    case_id: UUID,
+    case_version: int = 7,
+    entity_id: UUID | None = None,
+) -> EvidenceNodeRef:
+    return EvidenceNodeRef(
+        case_id=case_id,
+        case_version=case_version,
+        entity_type=entity_type,
+        entity_id=entity_id or uuid4(),
+    )
+
+
+def test_lineage_edge_binds_shared_case_scope_for_allowlisted_triple() -> None:
+    case_id = uuid4()
+    source = _node(EvidenceEntityType.CONFIRMED_FACT, case_id=case_id)
+    target = _node(EvidenceEntityType.DOCUMENT_VERSION, case_id=case_id)
+
+    edge = EvidenceEdge.lineage(
+        edge_type=EvidenceEdgeType.SOURCED_FROM_DOCUMENT_VERSION,
+        source=source,
+        target=target,
+    )
+
+    assert edge.case_id == case_id
+    assert edge.case_version == 7
+    assert edge.source_entity_id == source.entity_id
+    assert edge.target_entity_id == target.entity_id
+
+
+def test_lineage_edge_rejects_cross_case_endpoints() -> None:
+    source = _node(EvidenceEntityType.CONFIRMED_FACT, case_id=uuid4())
+    target = _node(EvidenceEntityType.CANDIDATE_FACT, case_id=uuid4())
+
+    with pytest.raises(ValueError, match="case_id"):
+        EvidenceEdge.lineage(
+            edge_type=EvidenceEdgeType.DERIVED_FROM_CANDIDATE,
+            source=source,
+            target=target,
+        )
+
+
+def test_lineage_edge_rejects_cross_case_version_endpoints() -> None:
+    case_id = uuid4()
+    source = _node(EvidenceEntityType.CONFIRMED_FACT, case_id=case_id, case_version=7)
+    target = _node(EvidenceEntityType.PAGE_REGION, case_id=case_id, case_version=8)
+
+    with pytest.raises(ValueError, match="case_version"):
+        EvidenceEdge.lineage(
+            edge_type=EvidenceEdgeType.LOCATED_IN_REGION,
+            source=source,
+            target=target,
+        )
+
+
+def test_lineage_edge_rejects_non_allowlisted_triple() -> None:
+    case_id = uuid4()
+    source = _node(EvidenceEntityType.CONFIRMED_FACT, case_id=case_id)
+    # DERIVED_FROM_CANDIDATE with a DOCUMENT_VERSION target is not allowlisted.
+    target = _node(EvidenceEntityType.DOCUMENT_VERSION, case_id=case_id)
+
+    with pytest.raises(ValidationError, match="not allowlisted"):
+        EvidenceEdge.lineage(
+            edge_type=EvidenceEdgeType.DERIVED_FROM_CANDIDATE,
+            source=source,
+            target=target,
+        )
+
+
+def test_evidence_edge_is_immutable() -> None:
+    case_id = uuid4()
+    edge = EvidenceEdge.lineage(
+        edge_type=EvidenceEdgeType.LOCATED_IN_REGION,
+        source=_node(EvidenceEntityType.CONFIRMED_FACT, case_id=case_id),
+        target=_node(EvidenceEntityType.PAGE_REGION, case_id=case_id),
+    )
+    with pytest.raises(ValidationError, match="frozen"):
+        edge.edge_type = EvidenceEdgeType.DERIVED_FROM_CANDIDATE
