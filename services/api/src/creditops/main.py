@@ -11,9 +11,11 @@ from starlette.responses import Response
 from starlette.types import ExceptionHandler
 
 from creditops.api.audit import router as audit_router
+from creditops.api.audit_search import router as audit_search_router
 from creditops.api.auth import JwtVerifier, RemoteJwksKeyResolver
 from creditops.api.cases import router as cases_router
 from creditops.api.conditions import router as conditions_router
+from creditops.api.config_view import router as config_view_router
 from creditops.api.contract_packages import router as contract_packages_router
 from creditops.api.credit_decisions import router as credit_decisions_router
 from creditops.api.credit_ops import router as credit_ops_router
@@ -34,6 +36,7 @@ from creditops.api.notifications import router as notifications_router
 from creditops.api.orchestration import router as orchestration_router
 from creditops.api.prospects import router as prospects_router
 from creditops.api.repayments import router as repayments_router
+from creditops.api.reporting import router as reporting_router
 from creditops.api.risk_review import router as risk_review_router
 from creditops.api.security_interests import router as security_interests_router
 from creditops.api.settlement_recovery import router as settlement_recovery_router
@@ -83,6 +86,9 @@ from creditops.infrastructure.postgres.orchestration import (
 from creditops.infrastructure.postgres.prospects import PostgresProspectRepository
 from creditops.infrastructure.postgres.repayments import (
     PostgresRepaymentLedgerRepository,
+)
+from creditops.infrastructure.postgres.reporting import (
+    PostgresReportingRepository,
 )
 from creditops.infrastructure.postgres.repositories import PostgresUnitOfWorkFactory
 from creditops.infrastructure.postgres.risk_review import PostgresRiskReviewRepository
@@ -283,6 +289,11 @@ def create_app(
         if database_connection_factory is not None
         else None
     )
+    application.state.reporting_repository = (
+        PostgresReportingRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
     application.state.worker_dispatcher = (
         CloudRunDispatcher(
             project_id=cast(str, configured.gcp_project_id),
@@ -345,6 +356,9 @@ def create_app(
     application.include_router(monitoring_router)
     application.include_router(repayments_router)
     application.include_router(settlement_recovery_router)
+    application.include_router(reporting_router)
+    application.include_router(audit_search_router)
+    application.include_router(config_view_router)
     return application
 
 
