@@ -13,10 +13,16 @@ def _endpoint_env(prefix: str) -> dict[str, str]:
     }
 
 
-def test_shipped_catalog_pins_no_model_yet() -> None:
-    # Model IDs are benchmark-gated OPEN QUESTIONS; the shipped catalog stays
-    # empty so every capability fails closed until a model is chosen via PR.
-    assert dict(FPT_MODEL_CATALOG) == {}
+def test_shipped_catalog_pins_the_selected_stack() -> None:
+    # reasoning/vision/embedding are pinned by project decision; kie/table stay
+    # unpinned (fail closed) and reranking is not a catalog capability.
+    assert dict(FPT_MODEL_CATALOG) == {
+        "reasoning": "DeepSeek-V4-Flash",
+        "vision": "Qwen2.5-VL-72B-Instruct",
+        "embedding": "multilingual-e5-large",
+    }
+    assert "kie" not in FPT_MODEL_CATALOG
+    assert "table" not in FPT_MODEL_CATALOG
 
 
 def test_only_api_key_configures_no_capability() -> None:
