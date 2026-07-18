@@ -1084,3 +1084,456 @@ describe("CreditOps work-queue route", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+// --- Stage 7-10 gate surfaces -------------------------------------------------
+
+const STAGE_COOKIES = `${SESSION_COOKIE_NAME}=workforce-token; ${CSRF_COOKIE_NAME}=csrf-value`;
+const DRAFT_UUID_UPPER = "AAAAAAAA-1111-4111-8111-111111111111";
+const DRAFT_UUID_LOWER = "aaaaaaaa-1111-4111-8111-111111111111";
+
+function stageMutation(path: string, body: unknown) {
+  return request(
+    path,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://app.invalid",
+        [CSRF_HEADER_NAME]: "csrf-value",
+      },
+      body: JSON.stringify(body),
+    },
+    STAGE_COOKIES,
+  );
+}
+
+function seg(path: string): string[] {
+  return path.replace(/^\//, "").split("/");
+}
+
+describe("CreditOps stage-7 notification routes", () => {
+  it("forwards the notification GET and rejects a query on it", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ draft: null }, { status: 200 }));
+    const ok = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/notifications"),
+      seg("/api/v1/cases/case-1/notifications"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+
+    const rejected = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/notifications?cursor=x"),
+      seg("/api/v1/cases/case-1/notifications"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(400);
+  });
+
+  it("forwards the create-draft POST with an exactly-empty body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ id: "d1" }, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/notifications", {}),
+      seg("/api/v1/cases/case-1/notifications"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe("{}");
+  });
+
+  it("rejects a non-empty create-draft POST body", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/notifications", { force: true }),
+      seg("/api/v1/cases/case-1/notifications"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("validates and lower-cases the approve body pinned to the draft id", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/notifications/approve", {
+        draftId: DRAFT_UUID_UPPER,
+        rationale: "  Đủ căn cứ duyệt nội dung thông báo.  ",
+      }),
+      seg("/api/v1/cases/case-1/notifications/approve"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        draftId: DRAFT_UUID_LOWER,
+        rationale: "Đủ căn cứ duyệt nội dung thông báo.",
+      }),
+    );
+  });
+
+  it.each([
+    { name: "missing draftId", body: { rationale: "x" } },
+    { name: "non-uuid draftId", body: { draftId: "not-a-uuid", rationale: "x" } },
+    { name: "extra key", body: { draftId: DRAFT_UUID_LOWER, rationale: "x", note: "y" } },
+    {
+      name: "document-bytes rationale",
+      body: { draftId: DRAFT_UUID_LOWER, rationale: `JVBERi0${"A".repeat(80)}` },
+    },
+  ])("rejects an invalid approve body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/notifications/approve", body),
+      seg("/api/v1/cases/case-1/notifications/approve"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("forwards the deliver POST with an optional note (and an empty body)", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ id: "r1" }, { status: 201 }));
+    const withNote = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/notifications/deliver", {
+        receiptNote: "  Đã giao qua kênh mock.  ",
+      }),
+      seg("/api/v1/cases/case-1/notifications/deliver"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(withNote.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({ receiptNote: "Đã giao qua kênh mock." }),
+    );
+
+    const empty = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/notifications/deliver", {}),
+      seg("/api/v1/cases/case-1/notifications/deliver"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(empty.status).toBe(201);
+    expect(fetcher.mock.calls[1][1].body).toBe("{}");
+  });
+
+  it("rejects a deliver body with an undeclared key", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/notifications/deliver", { channel: "email" }),
+      seg("/api/v1/cases/case-1/notifications/deliver"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("CreditOps stage-8 contract-package routes", () => {
+  it("forwards the contract-packages GET and the empty create POST", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ package: {} }, { status: 200 }));
+    const get = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/contract-packages"),
+      seg("/api/v1/cases/case-1/contract-packages"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(get.status).toBe(200);
+
+    const create = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/contract-packages", {}),
+      seg("/api/v1/cases/case-1/contract-packages"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(create.status).toBe(200);
+    expect(fetcher.mock.calls[1][1].body).toBe("{}");
+  });
+
+  it("validates and reconstructs a redline body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/contract-packages/redlines", {
+        changeNote: "  Sửa điều khoản lãi suất.  ",
+        changedContent: "  Nội dung hợp đồng đã chỉnh sửa.  ",
+      }),
+      seg("/api/v1/cases/case-1/contract-packages/redlines"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        changeNote: "Sửa điều khoản lãi suất.",
+        changedContent: "Nội dung hợp đồng đã chỉnh sửa.",
+      }),
+    );
+  });
+
+  it.each([
+    { name: "missing changedContent", body: { changeNote: "x" } },
+    { name: "extra key", body: { changeNote: "x", changedContent: "y", who: "z" } },
+  ])("rejects an invalid redline body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/contract-packages/redlines", body),
+      seg("/api/v1/cases/case-1/contract-packages/redlines"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "/api/v1/cases/case-1/contract-packages/approve",
+    "/api/v1/cases/case-1/contract-packages/signature-authority",
+  ])("reconstructs the {rationale} body for %s", async (path) => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation(path, { rationale: "  Đủ điều kiện.  " }),
+      seg(path),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe(JSON.stringify({ rationale: "Đủ điều kiện." }));
+  });
+
+  it("rejects an approve body with a missing rationale", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/contract-packages/approve", { note: "x" }),
+      seg("/api/v1/cases/case-1/contract-packages/approve"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs a sign body with signer names and an optional note", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/contract-packages/sign", {
+        signerNames: [" Nguyễn Văn A ", "Trần B"],
+        evidenceNote: " Ký mô phỏng. ",
+      }),
+      seg("/api/v1/cases/case-1/contract-packages/sign"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({ signerNames: ["Nguyễn Văn A", "Trần B"], evidenceNote: "Ký mô phỏng." }),
+    );
+  });
+
+  it.each([
+    { name: "missing signerNames", body: { evidenceNote: "x" } },
+    { name: "empty signerNames", body: { signerNames: [] } },
+    { name: "non-string signer", body: { signerNames: [1, 2] } },
+  ])("rejects an invalid sign body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/contract-packages/sign", body),
+      seg("/api/v1/cases/case-1/contract-packages/sign"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("CreditOps stage-9 security-interest routes", () => {
+  it("forwards the ledger GET", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ interests: [] }, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/security-interests"),
+      seg("/api/v1/cases/case-1/security-interests"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("reconstructs a create-interest body with a closed asset kind", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/security-interests", {
+        assetKind: "REAL_ESTATE",
+        assetDescription: "  Nhà đất số 10.  ",
+        ownerName: " Ông A ",
+      }),
+      seg("/api/v1/cases/case-1/security-interests"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        assetDescription: "Nhà đất số 10.",
+        assetKind: "REAL_ESTATE",
+        ownerName: "Ông A",
+      }),
+    );
+  });
+
+  it.each([
+    { name: "unknown asset kind", body: { assetKind: "GOLD", assetDescription: "x" } },
+    { name: "extra key", body: { assetKind: "OTHER", assetDescription: "x", rank: 1 } },
+  ])("rejects an invalid create-interest body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/security-interests", body),
+      seg("/api/v1/cases/case-1/security-interests"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs an add-item body with evidence refs and a valid date", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/security-interests/interest-1/items", {
+        requirement: "  Đăng ký thế chấp.  ",
+        evidenceRefs: [" ref-1 "],
+        effectiveDate: "2026-07-18",
+      }),
+      seg("/api/v1/cases/case-1/security-interests/interest-1/items"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        requirement: "Đăng ký thế chấp.",
+        evidenceRefs: ["ref-1"],
+        effectiveDate: "2026-07-18",
+      }),
+    );
+  });
+
+  it("rejects an add-item body with an impossible date", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/security-interests/interest-1/items", {
+        requirement: "x",
+        effectiveDate: "2026-13-40",
+      }),
+      seg("/api/v1/cases/case-1/security-interests/interest-1/items"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs an item transition and rejects an unknown status", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const ok = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/security-interests/items/item-1/transition", {
+        toStatus: "COMPLETED",
+        evidenceRefs: ["ref-1"],
+      }),
+      seg("/api/v1/cases/case-1/security-interests/items/item-1/transition"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({ toStatus: "COMPLETED", evidenceRefs: ["ref-1"] }),
+    );
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/security-interests/items/item-1/transition", {
+        toStatus: "DONE",
+      }),
+      seg("/api/v1/cases/case-1/security-interests/items/item-1/transition"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+
+  it("reconstructs the {rationale} security confirm body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/security-interests/confirm", {
+        rationale: " Đã hoàn thiện. ",
+      }),
+      seg("/api/v1/cases/case-1/security-interests/confirm"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe(JSON.stringify({ rationale: "Đã hoàn thiện." }));
+  });
+});
+
+describe("CreditOps stage-10 condition routes", () => {
+  it("forwards the conditions GET", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ conditions: [] }, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/cases/case-1/conditions"),
+      seg("/api/v1/cases/case-1/conditions"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("reconstructs a create-condition body with an optional due date", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }));
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/conditions", {
+        conditionText: "  Bổ sung vốn đối ứng.  ",
+        dueDate: "2026-08-01",
+      }),
+      seg("/api/v1/cases/case-1/conditions"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({ conditionText: "Bổ sung vốn đối ứng.", dueDate: "2026-08-01" }),
+    );
+  });
+
+  it.each([
+    { name: "missing conditionText", body: { owner: "x" } },
+    { name: "extra key", body: { conditionText: "x", severity: "high" } },
+  ])("rejects an invalid create-condition body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/conditions", body),
+      seg("/api/v1/cases/case-1/conditions"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs a condition transition and rejects an unknown status", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const ok = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/conditions/cond-1/transition", {
+        toStatus: "WAIVED_BY_HUMAN",
+        rationale: " Miễn trừ có thẩm quyền. ",
+      }),
+      seg("/api/v1/cases/case-1/conditions/cond-1/transition"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({ toStatus: "WAIVED_BY_HUMAN", rationale: "Miễn trừ có thẩm quyền." }),
+    );
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/conditions/cond-1/transition", {
+        toStatus: "APPROVED",
+      }),
+      seg("/api/v1/cases/case-1/conditions/cond-1/transition"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+
+  it("forwards the conditions confirm POST with an exactly-empty body", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const ok = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/conditions/confirm", {}),
+      seg("/api/v1/cases/case-1/conditions/confirm"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(ok.status).toBe(200);
+    expect(fetcher.mock.calls[0][1].body).toBe("{}");
+
+    const rejected = await proxyCreditOpsRequest(
+      stageMutation("/api/v1/cases/case-1/conditions/confirm", { rationale: "x" }),
+      seg("/api/v1/cases/case-1/conditions/confirm"),
+      { fetcher, upstreamBaseUrl },
+    );
+    expect(rejected.status).toBe(422);
+  });
+});

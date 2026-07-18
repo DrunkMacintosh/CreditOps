@@ -427,6 +427,53 @@ function validateAndReconstructMutation(
     return canonicalizeConfirmation(value);
   }
 
+  // Stage 7-10 gate surfaces. The create-draft (notifications, contract
+  // packages) and the conditions confirm endpoints declare NO backend request
+  // model: they take an exactly-empty JSON body.
+  if (
+    isNotificationCreate(segments) ||
+    isContractPackageCreate(segments) ||
+    isConditionsConfirm(segments)
+  ) {
+    return hasExactKeys(value, []) ? {} : null;
+  }
+  if (isNotificationApprove(segments)) {
+    return canonicalizeNotificationApprove(value);
+  }
+  if (isNotificationDeliver(segments)) {
+    return canonicalizeNotificationDeliver(value);
+  }
+  if (isContractRedline(segments)) {
+    return canonicalizeContractRedline(value);
+  }
+  // Contract approve + signature-authority and the stage-9 security confirm all
+  // mirror the same backend {rationale} model.
+  if (
+    isContractApprove(segments) ||
+    isContractSignatureAuthority(segments) ||
+    isSecurityConfirm(segments)
+  ) {
+    return canonicalizeRationaleOnly(value);
+  }
+  if (isContractSign(segments)) {
+    return canonicalizeContractSign(value);
+  }
+  if (isSecurityInterestCreate(segments)) {
+    return canonicalizeSecurityInterest(value);
+  }
+  if (isSecurityItemAdd(segments)) {
+    return canonicalizeAddPerfectionItem(value);
+  }
+  if (isSecurityItemTransition(segments)) {
+    return canonicalizeTransitionPerfectionItem(value);
+  }
+  if (isConditionCreate(segments)) {
+    return canonicalizeCreateCondition(value);
+  }
+  if (isConditionTransition(segments)) {
+    return canonicalizeTransitionCondition(value);
+  }
+
   return null;
 }
 
@@ -671,6 +718,389 @@ function canonicalizeConfirmation(
   return { expectedDocumentVersion, dispositions: canonicalDispositions };
 }
 
+// --- Stage 7-10 route predicates + body reconstruction --------------------
+//
+// Backend truth mirrored here (extra="forbid" on every model):
+//   services/.../api/notifications.py, contract_packages.py,
+//   security_interests.py, conditions.py. Each canonicalizer rebuilds the body
+//   field-by-field so an undeclared key, a wrong type, or a smuggled document
+//   byte-stream fails closed before reaching upstream.
+
+//: Closed PROPOSED synthetic taxonomies mirrored from the stage-9/10 domains.
+const SECURITY_ASSET_KINDS = new Set([
+  "REAL_ESTATE",
+  "VEHICLE",
+  "DEPOSIT",
+  "RECEIVABLE",
+  "OTHER",
+]);
+const PERFECTION_STATUSES = new Set([
+  "PENDING",
+  "EVIDENCE_ATTACHED",
+  "COMPLETED",
+  "NOT_REQUIRED_BY_HUMAN",
+  "EXPIRED",
+]);
+const CONDITION_STATUSES = new Set([
+  "PENDING",
+  "EVIDENCE_SUBMITTED",
+  "VERIFIED",
+  "FAILED",
+  "WAIVER_REQUESTED",
+  "WAIVED_BY_HUMAN",
+  "SUPERSEDED",
+  "NOT_APPLICABLE_BY_HUMAN",
+]);
+const MAX_EVIDENCE_REFS = 50;
+const MAX_EVIDENCE_REF_LEN = 500;
+const MAX_SIGNER_NAMES = 25;
+const MAX_SIGNER_NAME_LEN = 500;
+const MAX_CONTRACT_CONTENT = 200_000;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function pathOf(segments: string[]): string {
+  return `/${segments.join("/")}`;
+}
+
+function isNotificationCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/notifications$/.test(pathOf(segments));
+}
+
+function isNotificationApprove(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/notifications\/approve$/.test(
+    pathOf(segments),
+  );
+}
+
+function isNotificationDeliver(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/notifications\/deliver$/.test(
+    pathOf(segments),
+  );
+}
+
+function isContractPackageCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages$/.test(pathOf(segments));
+}
+
+function isContractRedline(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/redlines$/.test(
+    pathOf(segments),
+  );
+}
+
+function isContractApprove(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/approve$/.test(
+    pathOf(segments),
+  );
+}
+
+function isContractSignatureAuthority(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/signature-authority$/.test(
+    pathOf(segments),
+  );
+}
+
+function isContractSign(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/sign$/.test(
+    pathOf(segments),
+  );
+}
+
+function isSecurityInterestCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests$/.test(pathOf(segments));
+}
+
+function isSecurityConfirm(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests\/confirm$/.test(
+    pathOf(segments),
+  );
+}
+
+function isSecurityItemAdd(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests\/[A-Za-z0-9_-]+\/items$/.test(
+    pathOf(segments),
+  );
+}
+
+function isSecurityItemTransition(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests\/items\/[A-Za-z0-9_-]+\/transition$/.test(
+    pathOf(segments),
+  );
+}
+
+function isConditionCreate(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions$/.test(pathOf(segments));
+}
+
+function isConditionsConfirm(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions\/confirm$/.test(pathOf(segments));
+}
+
+function isConditionTransition(segments: string[]): boolean {
+  return /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions\/[A-Za-z0-9_-]+\/transition$/.test(
+    pathOf(segments),
+  );
+}
+
+// An ISO calendar date (YYYY-MM-DD) that is a real day; anything else fails.
+function normalizedDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!ISO_DATE.test(trimmed)) return null;
+  const [year, month, day] = trimmed.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return trimmed;
+}
+
+// A bounded array of non-empty, non-byte-carrying strings (evidence refs,
+// signer names). Reconstructed element-by-element; any bad entry fails closed.
+function canonicalizeStringArray(
+  value: unknown,
+  maxCount: number,
+  maxLen: number,
+): string[] | null {
+  if (!Array.isArray(value) || value.length > maxCount) return null;
+  const result: string[] = [];
+  for (const entry of value) {
+    const text = normalizedString(entry, 1, maxLen);
+    if (text === null || looksLikeDocumentBytes(text)) return null;
+    result.push(text);
+  }
+  return result;
+}
+
+// Mirrors ApproveNotificationRequest: exactly {draftId, rationale}. The draftId
+// is lower-cased so two UUID spellings can never disagree with the backend.
+function canonicalizeNotificationApprove(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["draftId", "rationale"])) return null;
+  const draftId = typeof value.draftId === "string" ? value.draftId.trim().toLowerCase() : "";
+  if (!UUID.test(draftId)) return null;
+  const rationale = normalizedString(value.rationale, 1, 4000);
+  if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+  return { draftId, rationale };
+}
+
+// Mirrors DeliverNotificationRequest: an OPTIONAL {receiptNote}. An empty body
+// (no note) is valid; the backend defaults the labelled mock note.
+function canonicalizeNotificationDeliver(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (Object.keys(value).some((key) => key !== "receiptNote")) return null;
+  if (!("receiptNote" in value)) return {};
+  const receiptNote = normalizedString(value.receiptNote, 1, 4000);
+  if (receiptNote === null || looksLikeDocumentBytes(receiptNote)) return null;
+  return { receiptNote };
+}
+
+// Mirrors AddRedlineRequest: exactly {changeNote, changedContent}. The redlined
+// content is a large free-text field (<=200000 chars) that may legitimately
+// embed content hashes, so it is NOT run through the base64 heuristic (which
+// would false-positive on a 64-char hex hash); it is still length- and
+// control-char-bounded by normalizedString.
+function canonicalizeContractRedline(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["changeNote", "changedContent"])) return null;
+  const changeNote = normalizedString(value.changeNote, 1, 4000);
+  const changedContent = normalizedString(value.changedContent, 1, MAX_CONTRACT_CONTENT);
+  if (changeNote === null || looksLikeDocumentBytes(changeNote)) return null;
+  if (changedContent === null) return null;
+  return { changeNote, changedContent };
+}
+
+// Mirrors ApproveRequest / SignatureAuthorityRequest / ConfirmRequest: exactly
+// {rationale}, 1-4000 chars, no smuggled bytes.
+function canonicalizeRationaleOnly(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["rationale"])) return null;
+  const rationale = normalizedString(value.rationale, 1, 4000);
+  if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+  return { rationale };
+}
+
+// Mirrors SignRequest: {signerNames (>=1), evidenceNote?}.
+function canonicalizeContractSign(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (Object.keys(value).some((key) => key !== "signerNames" && key !== "evidenceNote")) {
+    return null;
+  }
+  if (!("signerNames" in value)) return null;
+  const signerNames = canonicalizeStringArray(
+    value.signerNames,
+    MAX_SIGNER_NAMES,
+    MAX_SIGNER_NAME_LEN,
+  );
+  if (signerNames === null || signerNames.length < 1) return null;
+  const canonical: Record<string, unknown> = { signerNames };
+  if ("evidenceNote" in value) {
+    const evidenceNote = normalizedString(value.evidenceNote, 1, 4000);
+    if (evidenceNote === null || looksLikeDocumentBytes(evidenceNote)) return null;
+    canonical.evidenceNote = evidenceNote;
+  }
+  return canonical;
+}
+
+// Mirrors CreateInterestRequest.
+function canonicalizeSecurityInterest(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set([
+    "assetDescription",
+    "assetKind",
+    "ownerName",
+    "valuationReference",
+    "notes",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const assetDescription = normalizedString(value.assetDescription, 1, 2000);
+  const assetKind = normalizedString(value.assetKind, 1, 32);
+  if (assetDescription === null || looksLikeDocumentBytes(assetDescription)) return null;
+  if (assetKind === null || !SECURITY_ASSET_KINDS.has(assetKind)) return null;
+  const canonical: Record<string, unknown> = { assetDescription, assetKind };
+  const optionalText: [string, number][] = [
+    ["ownerName", 500],
+    ["valuationReference", 500],
+    ["notes", 4000],
+  ];
+  for (const [key, max] of optionalText) {
+    if (!(key in value)) continue;
+    const text = normalizedString(value[key], 1, max);
+    if (text === null || looksLikeDocumentBytes(text)) return null;
+    canonical[key] = text;
+  }
+  return canonical;
+}
+
+// Mirrors AddItemRequest.
+function canonicalizeAddPerfectionItem(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set([
+    "requirement",
+    "evidenceRefs",
+    "filingReference",
+    "effectiveDate",
+    "expiryDate",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const requirement = normalizedString(value.requirement, 1, 2000);
+  if (requirement === null || looksLikeDocumentBytes(requirement)) return null;
+  const canonical: Record<string, unknown> = { requirement };
+  return finishPerfectionOptionals(value, canonical);
+}
+
+// Mirrors TransitionItemRequest.
+function canonicalizeTransitionPerfectionItem(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set([
+    "toStatus",
+    "rationale",
+    "evidenceRefs",
+    "filingReference",
+    "effectiveDate",
+    "expiryDate",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const toStatus = normalizedString(value.toStatus, 1, 32);
+  if (toStatus === null || !PERFECTION_STATUSES.has(toStatus)) return null;
+  const canonical: Record<string, unknown> = { toStatus };
+  if ("rationale" in value) {
+    const rationale = normalizedString(value.rationale, 1, 4000);
+    if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+    canonical.rationale = rationale;
+  }
+  return finishPerfectionOptionals(value, canonical);
+}
+
+// The shared optional tail of the two perfection-item bodies (evidenceRefs,
+// filingReference, effectiveDate, expiryDate).
+function finishPerfectionOptionals(
+  value: Record<string, unknown>,
+  canonical: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if ("evidenceRefs" in value) {
+    const evidenceRefs = canonicalizeStringArray(
+      value.evidenceRefs,
+      MAX_EVIDENCE_REFS,
+      MAX_EVIDENCE_REF_LEN,
+    );
+    if (evidenceRefs === null) return null;
+    canonical.evidenceRefs = evidenceRefs;
+  }
+  if ("filingReference" in value) {
+    const filingReference = normalizedString(value.filingReference, 1, 500);
+    if (filingReference === null || looksLikeDocumentBytes(filingReference)) return null;
+    canonical.filingReference = filingReference;
+  }
+  for (const key of ["effectiveDate", "expiryDate"]) {
+    if (!(key in value)) continue;
+    const date = normalizedDate(value[key]);
+    if (date === null) return null;
+    canonical[key] = date;
+  }
+  return canonical;
+}
+
+// Mirrors CreateConditionRequest.
+function canonicalizeCreateCondition(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set(["conditionText", "owner", "dueDate"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const conditionText = normalizedString(value.conditionText, 1, 4000);
+  if (conditionText === null || looksLikeDocumentBytes(conditionText)) return null;
+  const canonical: Record<string, unknown> = { conditionText };
+  if ("owner" in value) {
+    const owner = normalizedString(value.owner, 1, 400);
+    if (owner === null || looksLikeDocumentBytes(owner)) return null;
+    canonical.owner = owner;
+  }
+  if ("dueDate" in value) {
+    const dueDate = normalizedDate(value.dueDate);
+    if (dueDate === null) return null;
+    canonical.dueDate = dueDate;
+  }
+  return canonical;
+}
+
+// Mirrors TransitionConditionRequest.
+function canonicalizeTransitionCondition(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allowed = new Set(["toStatus", "rationale", "evidenceRefs"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return null;
+  const toStatus = normalizedString(value.toStatus, 1, 64);
+  if (toStatus === null || !CONDITION_STATUSES.has(toStatus)) return null;
+  const canonical: Record<string, unknown> = { toStatus };
+  if ("rationale" in value) {
+    const rationale = normalizedString(value.rationale, 1, 4000);
+    if (rationale === null || looksLikeDocumentBytes(rationale)) return null;
+    canonical.rationale = rationale;
+  }
+  if ("evidenceRefs" in value) {
+    const evidenceRefs = canonicalizeStringArray(
+      value.evidenceRefs,
+      MAX_EVIDENCE_REFS,
+      MAX_EVIDENCE_REF_LEN,
+    );
+    if (evidenceRefs === null) return null;
+    canonical.evidenceRefs = evidenceRefs;
+  }
+  return canonical;
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
@@ -775,6 +1205,52 @@ function allowlisted(method: string, segments: string[]): boolean {
       )) ||
     (method === "POST" &&
       /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/intake-completion$/.test(path)) ||
+    // Stage 7 — credit notification draft / approval / mock delivery.
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/notifications$/.test(path)) ||
+    (method === "POST" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/notifications$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/notifications\/approve$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/notifications\/deliver$/.test(path)) ||
+    // Stage 8 — contract package draft / redlines / signing gates.
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/redlines$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/approve$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/signature-authority$/.test(
+        path,
+      )) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/contract-packages\/sign$/.test(path)) ||
+    // Stage 9 — per-asset security-perfection ledger + confirm gate.
+    (method === "GET" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests\/confirm$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests\/items\/[A-Za-z0-9_-]+\/transition$/.test(
+        path,
+      )) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/security-interests\/[A-Za-z0-9_-]+\/items$/.test(
+        path,
+      )) ||
+    // Stage 10 — disbursement condition ledger + confirm gate.
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions$/.test(path)) ||
+    (method === "POST" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions\/confirm$/.test(path)) ||
+    (method === "POST" &&
+      /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conditions\/[A-Za-z0-9_-]+\/transition$/.test(
+        path,
+      )) ||
     (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/handoffs$/.test(path)) ||
     (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/audit-events$/.test(path))
   );
