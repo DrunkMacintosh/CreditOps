@@ -44,15 +44,24 @@ class GateType(StrEnum):
     - ``HG_FINANCING_NEED_CONFIRMED`` stage-2 confirmation of the versioned
       financing request (master design section 5 stage 2).  PROPOSED synthetic
       gate name; no official SHB mapping.  Human-satisfied only, like G2/G3/G4.
+    - ``HG_UNDERWRITING_ASSESSMENT_REVIEWED`` stage-4 human review of the maker's
+      underwriting assessment (master design section 5 giai đoạn 4).
+    - ``HG_LEGAL_ASSESSMENT_REVIEWED`` stage-4 human review of the legal /
+      compliance / collateral assessment (master design section 5 giai đoạn 4).
+    - ``HG_MAKER_SUBMISSION_CONFIRMED`` stage-5 confirmation that the human
+      underwriter/maker submits the credit proposal (master design section 5
+      giai đoạn 5).  PROPOSED synthetic gate names; no official SHB mapping.
+      Human-satisfied only, like G2/G3/G4.
 
     Only ``G1`` may be satisfied by the engine (from the intake handoff).  Every
     other gate is satisfied exclusively by an authorized human disposition; no
     agent, plan, retry, or duplicate delivery may satisfy or bypass it.
 
-    NB (PROPOSED): ``HG_FINANCING_NEED_CONFIRMED`` is NOT a required_gate on any
-    task-graph node (application/orchestration/graph.py).  For now it is recorded
-    human state surfaced to the intake surface; whether intake-completion should
-    later REQUIRE it is a deferred decision, not wired here.
+    NB (PROPOSED): ``HG_FINANCING_NEED_CONFIRMED`` and the three stage-4/5
+    specialist/maker gates are NOT required_gate on any task-graph node
+    (application/orchestration/graph.py).  For now they are recorded human state
+    surfaced to their respective role surfaces; whether downstream readiness
+    should later REQUIRE them is a deferred decision, not wired here.
     """
 
     G1_INTAKE_COMPLETE = "G1_INTAKE_COMPLETE"
@@ -60,6 +69,9 @@ class GateType(StrEnum):
     G3_RISK_DISPOSITION = "G3_RISK_DISPOSITION"
     G4_OPS_AUTHORIZATION = "G4_OPS_AUTHORIZATION"
     HG_FINANCING_NEED_CONFIRMED = "HG_FINANCING_NEED_CONFIRMED"
+    HG_UNDERWRITING_ASSESSMENT_REVIEWED = "HG_UNDERWRITING_ASSESSMENT_REVIEWED"
+    HG_LEGAL_ASSESSMENT_REVIEWED = "HG_LEGAL_ASSESSMENT_REVIEWED"
+    HG_MAKER_SUBMISSION_CONFIRMED = "HG_MAKER_SUBMISSION_CONFIRMED"
 
 
 class GateStatus(StrEnum):

@@ -78,6 +78,18 @@ ALL_GATES: tuple[GateType, ...] = (
     # records/surfaces its state without blocking any existing node.  PROPOSED:
     # coupling intake-completion to it is a deferred decision, not wired yet.
     GateType.HG_FINANCING_NEED_CONFIRMED,
+    # Stage 4 & 5 (master design section 5 giai đoạn 4-5): the two specialist
+    # human-review gates and the maker-submission gate.  Each takes the SAME
+    # stored-status-only, default-OPEN path below as G2/G3/G4/HG_FINANCING -- the
+    # engine never satisfies them; only an authorized human (api/underwriting.py
+    # review/submit, api/legal.py review) can.  Like HG_FINANCING_NEED_CONFIRMED
+    # they are intentionally NOT a required_gate on any task-graph node
+    # (application/orchestration/graph.py), so adding them here records/surfaces
+    # their state without blocking any existing node.  PROPOSED: coupling
+    # downstream readiness to them is a deferred decision, not wired yet.
+    GateType.HG_UNDERWRITING_ASSESSMENT_REVIEWED,
+    GateType.HG_LEGAL_ASSESSMENT_REVIEWED,
+    GateType.HG_MAKER_SUBMISSION_CONFIRMED,
 )
 
 
