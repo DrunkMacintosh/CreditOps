@@ -145,6 +145,12 @@ class RunWorkerOnce:
 
         message: QueueMessage | None = None
         try:
+            # Recovery sweep: reclaim tasks a crashed worker left RUNNING past
+            # their lease before reading the queue, so a redelivered message
+            # resumes from a claimable state instead of redelivering forever.
+            # The durable reset is the effect; this module has no logger, so the
+            # reclaimed ids are returned state only.
+            await self._tasks.reclaim_stranded(now=self._clock())
             message = await self._queue.read_one(
                 visibility_timeout_seconds=self._visibility_timeout_seconds
             )

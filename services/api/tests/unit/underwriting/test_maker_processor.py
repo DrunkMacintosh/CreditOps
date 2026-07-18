@@ -827,6 +827,10 @@ class _MakerTaskStore:
         del kwargs
         self.slot_taken = False
 
+    async def reclaim_stranded(self, **kwargs: object) -> tuple[UUID, ...]:
+        del kwargs
+        return ()
+
     async def claim(self, **kwargs: object) -> TaskRecord | None:
         if kwargs["task_id"] != self.record.id:
             return None

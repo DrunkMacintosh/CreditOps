@@ -84,6 +84,10 @@ class ResumableTasks:
         del kwargs
         self.slot = False
 
+    async def reclaim_stranded(self, **kwargs):
+        del kwargs
+        return ()
+
     async def claim(self, *, lease_token, **kwargs):
         del kwargs
         if self.record.status not in (TaskStatus.PENDING, TaskStatus.RETRY_WAIT):

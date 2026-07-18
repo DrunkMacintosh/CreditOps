@@ -85,6 +85,7 @@ class FakeTasks(TaskRepository):
         self.checkpoints: list[TaskCheckpoint] = []
         self.succeeded = False
         self.retry_calls = 0
+        self.reclaim_calls = 0
 
     async def acquire_worker_slot(self, **kwargs: object) -> bool:
         del kwargs
@@ -96,6 +97,10 @@ class FakeTasks(TaskRepository):
     async def release_worker_slot(self, **kwargs: object) -> None:
         del kwargs
         self.slot_taken = False
+
+    async def reclaim_stranded(self, **kwargs: object) -> tuple[UUID, ...]:
+        self.reclaim_calls += 1
+        return ()
 
     async def claim(self, **kwargs: object) -> TaskRecord | None:
         if kwargs["task_id"] != self.record.id:
@@ -185,6 +190,9 @@ async def test_two_executions_allow_only_one_active_slot() -> None:
     assert tasks.succeeded is True
     assert queue.archived == [1]
     assert len(tasks.checkpoints) == 1
+    # The recovery sweep runs once, for the worker that won the slot only;
+    # the slot-less execution returns before sweeping.
+    assert tasks.reclaim_calls == 1
 
 
 @pytest.mark.asyncio
