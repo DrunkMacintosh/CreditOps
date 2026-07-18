@@ -194,7 +194,15 @@ class FPTClient:
             raise InferenceValidationError("FPT chat message is malformed")
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise InferenceValidationError("FPT chat content was not text")
+            # Reasoning models (e.g. DeepSeek-V4 Think modes) return the answer in
+            # ``reasoning_content`` with ``content`` null. Fall back to it: we
+            # still extract ONLY the JSON object and schema-validate it, so no raw
+            # reasoning is ever persisted or handed downstream.
+            reasoning = message.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning.strip():
+                content = reasoning
+            else:
+                raise InferenceValidationError("FPT chat content was not text")
         output = _extract_json_object(content)
         result: dict[str, Any] = {"output": output}
         usage = _map_usage(body.get("usage"))
