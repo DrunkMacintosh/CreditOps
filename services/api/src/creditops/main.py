@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import cast, get_args
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -12,13 +13,15 @@ from starlette.types import ExceptionHandler
 
 from creditops.api.audit import router as audit_router
 from creditops.api.audit_search import router as audit_search_router
-from creditops.api.auth import JwtVerifier, RemoteJwksKeyResolver
+from creditops.api.auth import JwksKeyResolver, JwtVerifier, RemoteJwksKeyResolver
 from creditops.api.cases import router as cases_router
 from creditops.api.conditions import router as conditions_router
 from creditops.api.config_view import router as config_view_router
 from creditops.api.contract_packages import router as contract_packages_router
 from creditops.api.credit_decisions import router as credit_decisions_router
 from creditops.api.credit_ops import router as credit_ops_router
+from creditops.api.demo_sessions import TokenBucket
+from creditops.api.demo_sessions import router as demo_sessions_router
 from creditops.api.disbursements import router as disbursements_router
 from creditops.api.errors import (
     ApiException,
@@ -47,6 +50,9 @@ from creditops.api.work_items import router as work_items_router
 from creditops.application.ports.storage import StoragePort
 from creditops.application.unit_of_work import UnitOfWorkFactory
 from creditops.config import Settings
+from creditops.domain.synthetic_notice import SYNTHETIC_NOTICE_VI
+from creditops.infrastructure.demo.signer import DemoJwtSigner
+from creditops.infrastructure.fpt.catalog import CapabilityName, FPTCatalog
 from creditops.infrastructure.gcp.cloud_run_dispatcher import CloudRunDispatcher
 from creditops.infrastructure.gcp.metadata_token import MetadataTokenProvider
 from creditops.infrastructure.mock.disbursement_adapter import (
@@ -146,14 +152,36 @@ def create_app(
         cast(ExceptionHandler, unexpected_exception_handler),
     )
 
-    if jwt_verifier is None and all(
+    oidc_configured = all(
         (configured.oidc_issuer, configured.oidc_audience, configured.oidc_jwks_url)
-    ):
+    )
+    if jwt_verifier is None and oidc_configured:
         jwt_verifier = JwtVerifier(
             issuer=cast(str, configured.oidc_issuer),
             audience=cast(str, configured.oidc_audience),
             key_resolver=RemoteJwksKeyResolver(cast(str, configured.oidc_jwks_url)),
         )
+
+    # Demo mode: build a LOCAL signer + a verifier seeded from its PUBLIC key so
+    # the API validates exactly the demo JWTs it mints.  The external OIDC path
+    # above still wins when it is configured; the demo verifier only fills in
+    # when no external issuer exists (fail closed to no verifier otherwise).
+    demo_signer: DemoJwtSigner | None = None
+    if configured.demo_session_enabled and configured.demo_jwt_private_key is not None:
+        demo_signer = DemoJwtSigner(
+            private_key_pem=configured.demo_jwt_private_key.get_secret_value(),
+            issuer=configured.demo_jwt_issuer,
+            audience=configured.demo_jwt_audience,
+            kid=configured.demo_jwt_kid,
+            ttl_seconds=configured.demo_session_ttl_seconds,
+        )
+        if jwt_verifier is None:
+            jwt_verifier = JwtVerifier(
+                issuer=configured.demo_jwt_issuer,
+                audience=configured.demo_jwt_audience,
+                key_resolver=JwksKeyResolver(demo_signer.public_jwks()),
+            )
+
     database_connection_factory = None
     if configured.database_url:
         database_connection_factory = PsycopgConnectionFactory(
@@ -165,6 +193,15 @@ def create_app(
         storage_port = SupabaseStorage(configured)
 
     application.state.jwt_verifier = jwt_verifier
+    application.state.demo_signer = demo_signer
+    application.state.demo_rate_limiter = (
+        TokenBucket(
+            burst=configured.demo_session_rate_limit_burst,
+            refill_per_second=configured.demo_session_rate_limit_refill_per_second,
+        )
+        if demo_signer is not None
+        else None
+    )
     application.state.uow_factory = uow_factory
     application.state.storage = storage_port
     application.state.task_repository = (
@@ -328,10 +365,91 @@ def create_app(
     def health() -> dict[str, str]:
         return {"service": configured.service_name, "status": "ok"}
 
-    @application.get("/api/v1/ready")
-    def ready() -> dict[str, str]:
-        return {"service": configured.service_name, "status": "configuration-valid"}
+    async def _probe_backends() -> tuple[str, str]:
+        """Bounded probe of the database and (PGMQ) queue reachability.
 
+        Returns ``(database_status, queue_status)`` where each is ``"ok"``,
+        ``"unavailable"`` or ``"disabled"``.  The probe opens one short-lived
+        connection, runs ``SELECT 1`` and checks for the ``pgmq`` schema; it
+        leaks no secret and is time-boxed so ``/ready`` cannot hang.
+        """
+
+        if database_connection_factory is None:
+            return "disabled", "disabled"
+        queue_configured = application.state.task_queue is not None
+        try:
+            async with asyncio.timeout(3.0):
+                async with database_connection_factory() as connection:
+                    cursor = await connection.execute("select 1")
+                    row = await cursor.fetchone()
+                    database_ok = row is not None and row[0] == 1
+                    queue_ok = False
+                    if queue_configured:
+                        queue_cursor = await connection.execute(
+                            "select 1 from pg_namespace where nspname = 'pgmq'"
+                        )
+                        queue_ok = await queue_cursor.fetchone() is not None
+        except Exception:
+            return "unavailable", ("unavailable" if queue_configured else "disabled")
+        database_status = "ok" if database_ok else "unavailable"
+        if not queue_configured:
+            return database_status, "disabled"
+        return database_status, ("ok" if queue_ok else "unavailable")
+
+    def _fpt_capability_states() -> list[dict[str, str]]:
+        """Non-secret ACTIVE/DISABLED state per FPT capability (fail closed).
+
+        Only capability names and their route state are exposed; endpoint URLs,
+        ids and keys are never touched.  Any configuration error collapses to
+        every capability DISABLED.
+        """
+
+        names = tuple(str(name) for name in get_args(CapabilityName))
+        active: set[str] = set()
+        try:
+            catalog = FPTCatalog.from_configuration()
+            active = {str(capability) for capability in catalog.capabilities}
+        except Exception:
+            active = set()
+        return [
+            {"capability": name, "state": "ACTIVE" if name in active else "DISABLED"}
+            for name in names
+        ]
+
+    if oidc_configured:
+        auth_mode = "oidc"
+    elif demo_signer is not None:
+        auth_mode = "demo"
+    else:
+        auth_mode = "none"
+
+    @application.get("/api/v1/ready")
+    async def ready() -> dict[str, object]:
+        database_status, queue_status = await _probe_backends()
+        storage_status = "ok" if application.state.storage is not None else "disabled"
+        auth_status = "ok" if application.state.jwt_verifier is not None else "disabled"
+        is_ready = (
+            database_status == "ok"
+            and queue_status == "ok"
+            and storage_status == "ok"
+            and auth_status == "ok"
+        )
+        return {
+            "service": configured.service_name,
+            "status": "ready" if is_ready else "not-ready",
+            "ready": is_ready,
+            "components": {
+                "database": {"status": database_status},
+                "queue": {"status": queue_status},
+                "storage": {"status": storage_status},
+                "auth": {"status": auth_status, "mode": auth_mode},
+                "fpt": {"capabilities": _fpt_capability_states()},
+            },
+            "disclaimer": SYNTHETIC_NOTICE_VI,
+        }
+
+    if demo_signer is not None:
+        application.include_router(demo_sessions_router)
     application.include_router(cases_router)
     application.include_router(uploads_router)
     application.include_router(tasks_router)

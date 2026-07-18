@@ -130,11 +130,42 @@ class JwtVerifier:
         )
 
 
+#: App session token header.  In production the BFF sends the Google Cloud Run
+#: OIDC id token in the standard ``Authorization`` header (so the Cloud Run
+#: ``--no-allow-unauthenticated`` invoker check passes) and the CreditOps app
+#: session JWT here, so the two identities never collide.
+APP_AUTHORIZATION_HEADER = "X-CreditOps-Authorization"
+
+
+def _extract_bearer_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> str | None:
+    """Prefer the app-session header, falling back to standard Authorization.
+
+    The dedicated ``X-CreditOps-Authorization`` header carries the app session
+    JWT when the standard ``Authorization`` header is already consumed by the
+    Cloud Run invoker's OIDC id token.  When it is absent the behaviour is
+    exactly the legacy single-header path, so existing callers are unaffected.
+    """
+
+    app_header = request.headers.get(APP_AUTHORIZATION_HEADER)
+    if app_header is not None:
+        scheme, _, token = app_header.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            return None
+        return token.strip()
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return None
+    return credentials.credentials
+
+
 async def require_actor(
     request: Request,
     credentials: BearerCredentials,
 ) -> ActorContext:
-    if credentials is None or credentials.scheme.lower() != "bearer":
+    token = _extract_bearer_token(request, credentials)
+    if token is None:
         raise ApiException(
             status_code=401,
             code="AUTHENTICATION_REQUIRED",
@@ -153,7 +184,7 @@ async def require_actor(
 
     try:
         return await verifier.verify(
-            credentials.credentials,
+            token,
             request_id=request.state.correlation_id,
         )
     except AuthenticationError as exc:
