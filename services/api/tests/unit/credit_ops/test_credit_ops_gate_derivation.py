@@ -1,16 +1,20 @@
-"""G2/G4 derivation tests (application/orchestration/gates.py).
+"""G4 derivation tests (application/orchestration/gates.py).
 
 Requirements exercised: (c) missing approval blocks the action -- no
 authorization record means G4 stays OPEN; the credit-ops worker's own output
-can never satisfy either gate -- every SATISFIED path requires a human
-record; G2 derives from document-request approvals (the G2 pattern).
+can never satisfy G4 -- every SATISFIED path requires a human record.
+
+G2 is no longer derived here: it moved to the pre-Risk gap-request workflow
+(``domain/gap_request_batches.derive_g2_from_batch``,
+``tests/unit/domain/test_gap_request_batches.py``).  ``derive_g2_status`` and
+the package-based G2 path are gone, which is what breaks the deadlock.
 """
 
 from __future__ import annotations
 
 from uuid import uuid4
 
-from creditops.application.orchestration.gates import derive_g2_status, derive_g4_status
+from creditops.application.orchestration.gates import derive_g4_status
 from creditops.domain.orchestration import GateStatus
 
 
@@ -85,36 +89,8 @@ def test_agent_output_alone_can_never_satisfy_g4() -> None:
     )
 
 
-def test_g2_stays_open_without_a_package() -> None:
-    assert (
-        derive_g2_status(package_exists=False, request_ids=set(), approved_request_ids=set())
-        is GateStatus.OPEN
-    )
+def test_gates_module_no_longer_exposes_a_package_based_g2_derivation() -> None:
+    # Regression guard: the deadlocking package-based G2 path is deleted.
+    from creditops.application.orchestration import gates
 
-
-def test_g2_requires_every_document_request_to_be_approved() -> None:
-    request_a, request_b = uuid4(), uuid4()
-    assert (
-        derive_g2_status(
-            package_exists=True,
-            request_ids={request_a, request_b},
-            approved_request_ids={request_a},
-        )
-        is GateStatus.OPEN
-    )
-    assert (
-        derive_g2_status(
-            package_exists=True,
-            request_ids={request_a, request_b},
-            approved_request_ids={request_a, request_b},
-        )
-        is GateStatus.SATISFIED
-    )
-
-
-def test_g2_with_zero_requests_is_vacuously_satisfied() -> None:
-    # Nothing was drafted, so there is nothing a human must approve.
-    assert (
-        derive_g2_status(package_exists=True, request_ids=set(), approved_request_ids=set())
-        is GateStatus.SATISFIED
-    )
+    assert not hasattr(gates, "derive_g2_status")

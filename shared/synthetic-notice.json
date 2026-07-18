@@ -1,0 +1,5 @@
+{
+  "$comment": "Single source of truth for the canonical synthetic-data notice (AGENTS.md, Non-negotiable boundaries). Backend, frontend, and deck tests assert their pinned constants equal these exact strings; change them only through a reviewed governance decision.",
+  "en": "All customer data, policies, documents, and banking-system responses in this project are synthetic and created solely for demonstration.",
+  "vi": "Toàn bộ dữ liệu khách hàng, chính sách, tài liệu và phản hồi hệ thống ngân hàng trong dự án này là dữ liệu tổng hợp, được tạo riêng cho mục đích trình diễn."
+}

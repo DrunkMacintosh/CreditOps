@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Any
@@ -19,6 +20,7 @@ from creditops.application.ports.orchestration import (
     OrchestrationAuditEvent,
     OrchestrationSnapshot,
     OrchestrationTaskRow,
+    OutboxEventRow,
 )
 from creditops.application.ports.repositories import CaseRecord
 from creditops.config import Settings
@@ -40,6 +42,7 @@ class FakeOrchestrationRepository:
         self.gates: dict[GateType, GateRecord] = {}
         self.audit_events: list[OrchestrationAuditEvent] = []
         self.proposals: list[dict[str, object]] = []
+        self.outbox: list[OutboxEventRow] = []
 
     async def load_snapshot(self, case_id: UUID) -> OrchestrationSnapshot | None:
         if case_id != CASE_ID:
@@ -70,6 +73,22 @@ class FakeOrchestrationRepository:
             status=TaskStatus.PENDING,
         )
         self.tasks_by_key[key] = row
+        envelope = TaskEnvelopeV1(
+            task_id=kwargs["task_id"],
+            case_id=kwargs["case_id"],
+            case_version=int(kwargs["case_version"]),
+            task_type=kwargs["task_type"],
+            document_version_id=None,
+        )
+        self.outbox.append(
+            OutboxEventRow(
+                event_id=uuid4(),
+                case_id=kwargs["case_id"],
+                case_version=int(kwargs["case_version"]),
+                event_type="TASK_READY",
+                payload=envelope.model_dump(mode="json"),
+            )
+        )
         return CreatedTask(row=row, created=True)
 
     async def record_proposal(self, **kwargs: object) -> None:
@@ -77,6 +96,25 @@ class FakeOrchestrationRepository:
 
     async def append_audit(self, event: OrchestrationAuditEvent) -> None:
         self.audit_events.append(event)
+
+    async def load_undispatched_outbox(self, *, limit: int) -> tuple[OutboxEventRow, ...]:
+        return tuple(
+            event for event in self.outbox if event.dispatched_at is None
+        )[:limit]
+
+    async def mark_outbox_dispatched(self, event_id: UUID) -> None:
+        for index, event in enumerate(self.outbox):
+            if event.event_id == event_id and event.dispatched_at is None:
+                self.outbox[index] = replace(
+                    event, dispatched_at=datetime.now(UTC)
+                )
+
+    async def record_outbox_dispatch_failure(self, event_id: UUID) -> None:
+        for index, event in enumerate(self.outbox):
+            if event.event_id == event_id and event.dispatched_at is None:
+                self.outbox[index] = replace(
+                    event, dispatch_attempts=event.dispatch_attempts + 1
+                )
 
 
 class RecordingQueue:
@@ -244,7 +282,14 @@ def test_status_reports_plan_tasks_gates_and_no_capability_leak(
     assert readiness["CREDIT_UNDERWRITING"] == "IN_PROGRESS"
     assert readiness["INDEPENDENT_RISK_REVIEW"] == "BLOCKED"
     assert body["deadlock"] is None
-    assert "approve" not in response.text.lower()
+    # The neutral status view must not leak an action capability (e.g. an
+    # "approve"/"reject" affordance).  Gate TYPE names are recorded human state,
+    # not capabilities, so they are excluded from the scan -- a gate such as
+    # HG_CREDIT_NOTIFICATION_APPROVED legitimately ends in "_APPROVED".
+    scannable = response.text.lower()
+    for gate_type in gate_status:
+        scannable = scannable.replace(gate_type.lower(), "")
+    assert "approve" not in scannable
 
 
 def test_advance_is_a_202_idempotent_kickoff(

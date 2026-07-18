@@ -59,6 +59,12 @@ class CaseRepository(Protocol):
         limit: int,
     ) -> tuple[list[CaseRecord], UUID | None]: ...
 
+    async def list_assignment_roles(
+        self,
+        case_id: UUID,
+        actor_id: UUID,
+    ) -> frozenset[str]: ...
+
 
 class AuditRepository(Protocol):
     async def append(self, event: AuditEvent) -> None: ...

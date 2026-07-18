@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     data_class: str = "synthetic"
     service_name: str = "creditops-api"
     log_level: str = "INFO"
+    #: Which queue a worker execution serves.  Deliberately unset by default:
+    #: a worker without an explicit mode refuses to run (fail closed).
+    worker_mode: Literal["document", "agent"] | None = None
     database_url: SecretStr | None = None
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
@@ -19,6 +22,12 @@ class Settings(BaseSettings):
     supabase_url: str | None = None
     supabase_service_role_key: SecretStr | None = None
     supabase_storage_tus_url: str | None = None
+    #: Cloud Run worker Job coordinates.  All three must be present before a
+    #: dispatcher is composed; otherwise dispatch stays disabled and the
+    #: scheduled recovery sweep is the only trigger (fail closed).
+    gcp_project_id: str | None = None
+    gcp_location: str | None = None
+    gcp_worker_job_name: str | None = None
     supabase_storage_max_upload_bytes: int = 100 * 1024 * 1024
     supabase_storage_intent_ttl_seconds: int = 900
 

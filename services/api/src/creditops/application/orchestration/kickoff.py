@@ -1,11 +1,15 @@
-"""Kick off orchestration by enqueuing a single ORCHESTRATOR_PLAN task.
+"""Kick off orchestration by creating a single ORCHESTRATOR_PLAN task.
 
 This is the seam the intake handoff should call once a handoff row is written
 (state READY_FOR_SPECIALIST_REVIEW) so the deterministic engine takes over.  No
 application code writes intake handoffs yet, so the orchestration API exposes
 this as an explicit trigger; the wiring point is intentionally the same use case
 either caller would invoke.  The kick-off is idempotent per case version: a
-duplicate call enqueues no second planning task.
+duplicate call creates no second planning task.
+
+The kick-off never touches the queue: the repository commits the task row and
+its TASK_READY outbox event atomically (master design section 14.2), and the
+separate ``DispatchOutbox`` use case performs the queue send afterwards.
 """
 
 from __future__ import annotations
@@ -20,10 +24,8 @@ from creditops.application.ports.orchestration import (
     OrchestrationAuditEvent,
     OrchestrationRepository,
 )
-from creditops.application.ports.queue import QueuePort
 from creditops.domain.enums import TaskStatus
 from creditops.domain.orchestration import TaskType
-from creditops.domain.tasks import TaskEnvelopeV1
 
 
 class KickoffError(RuntimeError):
@@ -42,27 +44,35 @@ class KickoffResult:
     created: bool
 
 
-def _plan_idempotency_key(case_id: UUID, case_version: int) -> str:
-    return f"ORCH-PLAN:{case_id}:{case_version}"
+def _plan_idempotency_key(
+    case_id: UUID, case_version: int, trigger_ref: str | None
+) -> str:
+    # Version-scoped for the base kickoff; event-scoped when a specific
+    # trigger (gate satisfaction, handoff, task completion) re-ticks the
+    # case at the same version.  AdvanceCase itself is idempotent, so extra
+    # plan tasks are safe; the key only bounds them to one per trigger.
+    if trigger_ref is None:
+        return f"ORCH-PLAN:{case_id}:{case_version}"
+    return f"ORCH-PLAN:{case_id}:{case_version}:{trigger_ref}"
 
 
 class KickoffOrchestration:
     def __init__(
         self,
         repository: OrchestrationRepository,
-        queue: QueuePort,
         *,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], UUID] | None = None,
         execution_id_factory: Callable[[], UUID] | None = None,
     ) -> None:
         self._repository = repository
-        self._queue = queue
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or uuid4
         self._execution_id_factory = execution_id_factory or uuid4
 
-    async def execute(self, case_id: UUID) -> KickoffResult:
+    async def execute(
+        self, case_id: UUID, *, trigger_ref: str | None = None
+    ) -> KickoffResult:
         snapshot = await self._repository.load_snapshot(case_id)
         if snapshot is None:
             raise KickoffCaseNotFound("case is not visible to the orchestrator")
@@ -72,18 +82,14 @@ class KickoffOrchestration:
             case_id=case_id,
             case_version=snapshot.case_version,
             task_type=TaskType.ORCHESTRATOR_PLAN,
-            idempotency_key=_plan_idempotency_key(case_id, snapshot.case_version),
-            input_payload={"trigger": "orchestration.kickoff"},
+            idempotency_key=_plan_idempotency_key(
+                case_id, snapshot.case_version, trigger_ref
+            ),
+            input_payload={
+                "trigger": trigger_ref or "orchestration.kickoff",
+            },
         )
         if result.created:
-            envelope = TaskEnvelopeV1(
-                task_id=result.row.task_id,
-                case_id=case_id,
-                case_version=snapshot.case_version,
-                task_type=TaskType.ORCHESTRATOR_PLAN,
-                document_version_id=None,
-            )
-            await self._queue.send(envelope)
             await self._audit(
                 case_id,
                 snapshot.case_version,

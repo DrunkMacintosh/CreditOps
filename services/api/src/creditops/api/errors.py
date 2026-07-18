@@ -13,6 +13,9 @@ class ApiError(BaseModel):
     message_vi: str = Field(serialization_alias="messageVi")
     correlation_id: str = Field(serialization_alias="correlationId")
     retryable: bool
+    #: Structured, machine-readable context (e.g. expected/current versions).
+    #: Never a stack trace, prompt, secret, or raw provider response.
+    details: dict[str, object] = Field(default_factory=dict)
 
 
 class ApiException(Exception):
@@ -24,6 +27,7 @@ class ApiException(Exception):
         message_vi: str,
         retryable: bool = False,
         headers: dict[str, str] | None = None,
+        details: dict[str, object] | None = None,
     ) -> None:
         super().__init__(code)
         self.status_code = status_code
@@ -31,6 +35,7 @@ class ApiException(Exception):
         self.message_vi = message_vi
         self.retryable = retryable
         self.headers = headers
+        self.details = details
 
 
 def correlation_id(request: Request) -> str:
@@ -46,12 +51,14 @@ def api_error_response(
     message_vi: str,
     retryable: bool,
     headers: dict[str, str] | None = None,
+    details: dict[str, object] | None = None,
 ) -> JSONResponse:
     error = ApiError(
         code=code,
         message_vi=message_vi,
         correlation_id=correlation_id(request),
         retryable=retryable,
+        details=details or {},
     )
     response = JSONResponse(
         status_code=status_code,
@@ -70,6 +77,7 @@ async def api_exception_handler(request: Request, exc: ApiException) -> JSONResp
         message_vi=exc.message_vi,
         retryable=exc.retryable,
         headers=exc.headers,
+        details=exc.details,
     )
 
 

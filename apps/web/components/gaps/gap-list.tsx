@@ -1,75 +1,70 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-import { creditOpsApi, getVietnameseApiError } from "../../lib/api/client";
+import { ApiClientError, creditOpsApi, getVietnameseApiError } from "../../lib/api/client";
 import type { CreditCaseDto } from "../../lib/api/contracts";
+import type {
+  BatchDispositionType,
+  GapRequestBatch,
+  GapRequestBatchStatus,
+  GapRequestItem,
+  ItemDisposition,
+  RecordDispositionInput,
+} from "../../lib/api/gap-requests";
+import {
+  BATCH_DISPOSITION_TYPE_LABELS,
+  BLOCKING_LEVEL_LABELS,
+  formatDateTime,
+  gapRequestsApi,
+  GapRequestsApiClient,
+  getGapRequestError,
+  isGapRequestBatchNotAvailable,
+  ITEM_DISPOSITION_LABELS,
+  labelOrUnsupported,
+  shortId,
+  UNSUPPORTED_ENUM_LABEL,
+} from "../../lib/api/gap-requests";
 import { CaseNav } from "../shell/case-nav";
 import { IntakeCompletionDialog } from "./intake-completion-dialog";
 import styles from "./gap-list.module.css";
 
-// Wire contract pending: no gap-listing endpoint is canonically pinned yet
-// (plan Task 9 names the file but not the path). These view types mirror the
-// domain shape in services/api/src/creditops/domain/gaps.py so the UI can be
-// built and tested now, ahead of the real contract.
-export type GapStatus = "PROVISIONAL" | "FORMAL" | "RESOLVED" | "STALE"; // canonical enum
+export type GapRequestItemView = GapRequestItem;
 
-export interface GapView {
-  id: string;
-  status: GapStatus;
-  issueVi: string; // mirrors domain EvidenceGap.issue_vi
-  missingInformationVi: string;
-  suggestedEvidenceVi: string[]; // draft suggestions, never approved requirements
-}
+const MAX_RATIONALE = 4000;
+const MAX_EDITED_TEXT = 2000;
 
-const STATUS_LABELS_VI: Readonly<Record<GapStatus, string>> = {
-  PROVISIONAL: "Tạm thời",
-  FORMAL: "Chính thức",
-  RESOLVED: "Đã giải quyết",
-  STALE: "Đã lỗi thời",
+const GATE_STATUS_LABELS: Record<string, string> = {
+  SATISFIED: "Đạt",
+  OPEN: "Đang chờ",
 };
 
-const STATUS_BADGE_CLASSES: Readonly<Record<GapStatus, string>> = {
-  PROVISIONAL: styles.badgeProvisional,
-  FORMAL: styles.badgeFormal,
-  RESOLVED: styles.badgeResolved,
-  STALE: styles.badgeStale,
-};
+const ITEM_CHOICES: readonly ItemDisposition[] = ["APPROVED", "REMOVED", "EDITED"];
 
-// Pure, props-driven: no fetch, no close/resolve controls — a gap can only be
-// dispositioned by an authorized human through the (not-yet-built) resolution
-// flow, never implicitly waived here. RESOLVED and STALE gaps stay listed so
-// history is never hidden.
-export function GapList({ gaps }: { gaps: GapView[] }) {
+// GapList: a read-only render of the batch's drafted outbound requests, one per
+// open evidence gap. No approve/remove control lives here — a request can only
+// be dispositioned through the batch disposition form below, never implicitly.
+export function GapList({ items }: { items: GapRequestItemView[] }) {
   return (
     <section aria-labelledby="gap-list-heading">
       <h2 className={styles.heading} id="gap-list-heading">
-        Khoảng trống chứng cứ
+        Danh sách yêu cầu bổ sung bằng chứng
       </h2>
-      {gaps.length === 0 ? (
-        <p className={styles.empty}>Chưa ghi nhận khoảng trống chứng cứ.</p>
+      {items.length === 0 ? (
+        <p className={styles.empty}>
+          Không có yêu cầu bổ sung nào: hiện không còn khoảng trống chứng cứ đang mở.
+        </p>
       ) : (
         <ul className={styles.list}>
-          {gaps.map((gap) => (
-            <li className={styles.item} data-status={gap.status} key={gap.id}>
-              <span className={`${styles.badge} ${STATUS_BADGE_CLASSES[gap.status]}`}>
-                {STATUS_LABELS_VI[gap.status]}
+          {items.map((item) => (
+            <li className={styles.item} data-blocking={item.blockingLevel} key={item.id}>
+              <span className={`${styles.badge} ${blockingBadgeClass(item.blockingLevel)}`}>
+                {labelOrUnsupported(BLOCKING_LEVEL_LABELS, item.blockingLevel)}
               </span>
-              <p className={styles.issue}>{gap.issueVi}</p>
-              <p className={styles.missingInformation}>{gap.missingInformationVi}</p>
-              {gap.suggestedEvidenceVi.length > 0 && (
-                <div className={styles.suggestions}>
-                  <p className={styles.suggestionLabel}>
-                    Đề xuất tài liệu (bản nháp, chưa được phê duyệt)
-                  </p>
-                  <ul className={styles.suggestionList}>
-                    {gap.suggestedEvidenceVi.map((suggestion, index) => (
-                      // eslint-disable-next-line react/no-array-index-key
-                      <li key={index}>{suggestion}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              <p className={styles.issue}>{item.requestText}</p>
+              <p className={styles.missingInformation}>
+                Khoảng trống nguồn: {shortId(item.gapId)}
+              </p>
             </li>
           ))}
         </ul>
@@ -78,43 +73,356 @@ export function GapList({ gaps }: { gaps: GapView[] }) {
   );
 }
 
-const GAP_CONTRACT_PENDING_TEXT =
-  "Danh sách khoảng trống chưa khả dụng: máy chủ chưa công bố hợp đồng API cho khoảng trống chứng cứ (kế hoạch Task 9).";
+function blockingBadgeClass(level: string): string {
+  switch (level) {
+    case "BLOCKING":
+      return styles.badgeBlocking;
+    case "CONDITIONAL":
+      return styles.badgeConditional;
+    case "CLARIFICATION":
+      return styles.badgeClarification;
+    default:
+      return styles.badgeStale;
+  }
+}
 
-const COMPLETION_UNAVAILABLE_REASON =
-  "Hợp đồng API hoàn tất tiếp nhận chưa được công bố; thao tác sẽ khả dụng khi backend phát hành.";
+function gateStatusLabel(status: string): string {
+  return GATE_STATUS_LABELS[status] ?? UNSUPPORTED_ENUM_LABEL;
+}
 
-// Client loader for app/ho-so/[caseId]/khoang-trong/page.tsx. Loads only the
-// canonical api.getCase (for version + capabilities.canCompleteIntake); it
-// performs NO gap fetch and NO completion mutation — see brief D contract
-// stance. This is intentional fail-closed behavior, not a stub to "fix".
+// Append-only human disposition of one gap-request batch. Type is NEVER
+// preselected; the option set depends on whether the batch has drafted items;
+// APPROVED_WITH_CHANGES requires an explicit per-item choice (and replacement
+// text for every item marked EDITED). The server re-derives the gate; this form
+// only records and, on a 409, keeps the draft and prompts a reload.
+function BatchDispositionForm({
+  batch,
+  onSubmit,
+  onReload,
+}: {
+  batch: GapRequestBatch;
+  onSubmit: (input: RecordDispositionInput) => Promise<void>;
+  onReload: () => void;
+}) {
+  const hasItems = batch.items.length > 0;
+  // NO_OUTBOUND_REQUESTS is offered ONLY for an empty batch; APPROVED_ALL /
+  // APPROVED_WITH_CHANGES only for a batch with drafted items. REJECTED always.
+  const options: readonly BatchDispositionType[] = hasItems
+    ? ["APPROVED_ALL", "APPROVED_WITH_CHANGES", "REJECTED"]
+    : ["NO_OUTBOUND_REQUESTS", "REJECTED"];
+
+  const [type, setType] = useState<BatchDispositionType | null>(null);
+  const [rationale, setRationale] = useState("");
+  const [itemChoices, setItemChoices] = useState<Record<string, ItemDisposition>>({});
+  const [editedTexts, setEditedTexts] = useState<Record<string, string>>({});
+  const [fieldError, setFieldError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [staleReload, setStaleReload] = useState(false);
+  const [pending, setPending] = useState(false);
+
+  const perItem = type === "APPROVED_WITH_CHANGES";
+
+  function buildInput(): RecordDispositionInput | { error: string } {
+    if (!type) return { error: "Chọn một loại quyết định trước khi ghi." };
+    const note = rationale.trim();
+    if (note.length === 0) {
+      return { error: "Nhập lý do cho quyết định; đây là trường bắt buộc." };
+    }
+    if (type !== "APPROVED_WITH_CHANGES") {
+      return { dispositionType: type, rationale: note };
+    }
+    const itemDispositions: Record<string, ItemDisposition> = {};
+    const editedForItems: Record<string, string> = {};
+    for (const item of batch.items) {
+      const choice = itemChoices[item.id];
+      if (!choice) {
+        return { error: "Chọn cách xử lý cho từng mục yêu cầu bổ sung." };
+      }
+      itemDispositions[item.id] = choice;
+      if (choice === "EDITED") {
+        const text = (editedTexts[item.id] ?? "").trim();
+        if (text.length === 0) {
+          return { error: "Nhập nội dung chỉnh sửa cho mỗi mục được đánh dấu chỉnh sửa." };
+        }
+        editedForItems[item.id] = text;
+      }
+    }
+    return {
+      dispositionType: type,
+      rationale: note,
+      itemDispositions,
+      editedTexts: editedForItems,
+    };
+  }
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (pending) return;
+    setSubmitError(null);
+    setStaleReload(false);
+
+    const built = buildInput();
+    if ("error" in built) {
+      setFieldError(built.error);
+      return;
+    }
+    setFieldError(null);
+
+    setPending(true);
+    try {
+      await onSubmit(built);
+      // Success: the parent refetches and this form unmounts / resets.
+      setType(null);
+      setRationale("");
+      setItemChoices({});
+      setEditedTexts({});
+    } catch (requestError) {
+      // House rule: a 409 keeps the draft intact and prompts a reload rather
+      // than discarding the officer's work.
+      if (requestError instanceof ApiClientError && requestError.status === 409) {
+        setStaleReload(true);
+      }
+      setSubmitError(getGapRequestError(requestError));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <form className={styles.form} noValidate onSubmit={handleSubmit}>
+      <p className={styles.formHeading}>Ghi quyết định cho đợt yêu cầu bổ sung</p>
+      <p className={styles.formHint}>
+        Mỗi yêu cầu là bản nháp; hệ thống không gửi đi bất cứ đâu. Cán bộ tiếp nhận ghi một
+        quyết định cho cả đợt. Cổng chỉ đạt khi quyết định còn khớp với khoảng trống hiện tại.
+      </p>
+
+      <fieldset className={styles.fieldset}>
+        <legend className={styles.fieldsetLegend}>
+          Loại quyết định <span className={styles.required}>*</span>
+        </legend>
+        <div className={styles.radioGroup}>
+          {options.map((option) => (
+            <label
+              className={styles.radioOption}
+              data-checked={type === option ? "true" : "false"}
+              key={option}
+            >
+              <input
+                checked={type === option}
+                disabled={pending}
+                name="gap-disposition-type"
+                onChange={() => {
+                  setType(option);
+                  setFieldError(null);
+                }}
+                type="radio"
+                value={option}
+              />
+              <span>{BATCH_DISPOSITION_TYPE_LABELS[option]}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      {perItem ? (
+        <div className={styles.itemChoiceList}>
+          <p className={styles.itemChoiceLead}>Xử lý từng mục yêu cầu bổ sung</p>
+          {batch.items.map((item) => {
+            const choice = itemChoices[item.id];
+            return (
+              <div className={styles.itemChoice} key={item.id}>
+                <p className={styles.itemChoiceText}>{item.requestText}</p>
+                <div className={styles.radioGroup} role="group" aria-label="Cách xử lý mục">
+                  {ITEM_CHOICES.map((option) => (
+                    <label
+                      className={styles.radioOption}
+                      data-checked={choice === option ? "true" : "false"}
+                      key={option}
+                    >
+                      <input
+                        checked={choice === option}
+                        disabled={pending}
+                        name={`item-choice-${item.id}`}
+                        onChange={() => {
+                          setItemChoices((current) => ({ ...current, [item.id]: option }));
+                          setFieldError(null);
+                        }}
+                        type="radio"
+                        value={option}
+                      />
+                      <span>{ITEM_DISPOSITION_LABELS[option]}</span>
+                    </label>
+                  ))}
+                </div>
+                {choice === "EDITED" ? (
+                  <label className={styles.editedField}>
+                    <span className={styles.fieldLabel}>
+                      Nội dung chỉnh sửa <span className={styles.required}>*</span>
+                    </span>
+                    <textarea
+                      className={styles.textarea}
+                      disabled={pending}
+                      maxLength={MAX_EDITED_TEXT}
+                      onChange={(changeEvent) => {
+                        const text = changeEvent.target.value;
+                        setEditedTexts((current) => ({ ...current, [item.id]: text }));
+                        if (fieldError) setFieldError(null);
+                      }}
+                      value={editedTexts[item.id] ?? ""}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <div className={styles.field}>
+        <label className={styles.fieldLabel} htmlFor="gap-disposition-rationale">
+          Lý do quyết định <span className={styles.required}>*</span>
+        </label>
+        <textarea
+          className={styles.textarea}
+          disabled={pending}
+          id="gap-disposition-rationale"
+          maxLength={MAX_RATIONALE}
+          onChange={(event) => {
+            setRationale(event.target.value);
+            if (fieldError) setFieldError(null);
+          }}
+          value={rationale}
+        />
+        <span className={styles.charCount}>
+          {rationale.length}/{MAX_RATIONALE}
+        </span>
+      </div>
+
+      {fieldError ? (
+        <p className={styles.fieldError} role="alert">
+          {fieldError}
+        </p>
+      ) : null}
+
+      {submitError ? (
+        <div className={styles.submitError} role="alert">
+          <p>{submitError}</p>
+          {staleReload ? (
+            <button
+              className="button button-secondary"
+              onClick={() => onReload()}
+              type="button"
+            >
+              Tải lại danh sách
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className={styles.formActions}>
+        <button aria-busy={pending} className={styles.submit} disabled={pending} type="submit">
+          {pending ? "Đang ghi quyết định…" : "Duyệt nội dung yêu cầu bổ sung"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// Client loader for app/ho-so/[caseId]/khoang-trong/page.tsx. Loads the case
+// (version + canCompleteIntake) and, if one exists, the current gap-request
+// batch via GET. It NEVER assembles a batch on render — assemble-or-get runs
+// only on the explicit "Tạo/tải danh sách yêu cầu bổ sung" action.
 export function GapWorkspace({
   caseId,
   api = creditOpsApi,
+  gapApi = gapRequestsApi,
 }: {
   caseId: string;
-  api?: Pick<typeof creditOpsApi, "getCase">;
+  api?: Pick<typeof creditOpsApi, "getCase" | "completeIntake">;
+  gapApi?: Pick<GapRequestsApiClient, "getBatch" | "assembleBatch" | "recordDisposition">;
 }) {
   const [creditCase, setCreditCase] = useState<CreditCaseDto | null>(null);
+  const [batchStatus, setBatchStatus] = useState<GapRequestBatchStatus | null>(null);
+  const [batchNotAvailable, setBatchNotAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [assembling, setAssembling] = useState(false);
+  const [assembleError, setAssembleError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setBatchNotAvailable(false);
+    setRefreshError(null);
     try {
-      setCreditCase(await api.getCase(caseId));
+      const loadedCase = await api.getCase(caseId);
+      setCreditCase(loadedCase);
+      try {
+        setBatchStatus(await gapApi.getBatch(caseId));
+      } catch (batchError) {
+        if (isGapRequestBatchNotAvailable(batchError)) {
+          setBatchStatus(null);
+          setBatchNotAvailable(true);
+        } else {
+          throw batchError;
+        }
+      }
     } catch (requestError) {
       setError(getVietnameseApiError(requestError));
     } finally {
       setLoading(false);
     }
-  }, [api, caseId]);
+  }, [api, caseId, gapApi]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Refetch the batch after a write; never throws — a recorded disposition must
+  // not look failed because a follow-up read hiccuped.
+  const refreshBatch = useCallback(async () => {
+    setRefreshError(null);
+    setBatchNotAvailable(false);
+    try {
+      setBatchStatus(await gapApi.getBatch(caseId));
+    } catch (requestError) {
+      if (isGapRequestBatchNotAvailable(requestError)) {
+        setBatchStatus(null);
+        setBatchNotAvailable(true);
+      } else {
+        setRefreshError(getGapRequestError(requestError));
+      }
+    }
+  }, [caseId, gapApi]);
+
+  // Explicit user action only — assemble-or-get, then refetch the batch view.
+  const assemble = useCallback(async () => {
+    setAssembling(true);
+    setAssembleError(null);
+    try {
+      await gapApi.assembleBatch(caseId);
+      await refreshBatch();
+    } catch (requestError) {
+      setAssembleError(getGapRequestError(requestError));
+    } finally {
+      setAssembling(false);
+    }
+  }, [caseId, gapApi, refreshBatch]);
+
+  const recordDisposition = useCallback(
+    async (batchId: string, input: RecordDispositionInput) => {
+      await gapApi.recordDisposition(caseId, batchId, input);
+      await refreshBatch();
+    },
+    [caseId, gapApi, refreshBatch],
+  );
+
+  const openGapCount = useMemo(
+    () => batchStatus?.batch.items.length ?? 0,
+    [batchStatus],
+  );
 
   if (loading) {
     return (
@@ -137,6 +445,9 @@ export function GapWorkspace({
   }
 
   const canCompleteIntake = creditCase.capabilities.canCompleteIntake;
+  const assembleLabel = assembling
+    ? "Đang tạo danh sách…"
+    : "Tạo/tải danh sách yêu cầu bổ sung";
 
   return (
     <>
@@ -145,11 +456,124 @@ export function GapWorkspace({
         <p className="eyebrow">Hồ sơ · phiên bản {creditCase.version}</p>
         <h1>Khoảng trống chứng cứ</h1>
       </div>
-      <div className="state-panel" role="status">
-        <p>{GAP_CONTRACT_PENDING_TEXT}</p>
-      </div>
+
+      {batchStatus ? (
+        <div className={styles.batchArea}>
+          <div className={styles.gateRow}>
+            <span
+              className={`${styles.gateChip} ${
+                batchStatus.gateStatus === "SATISFIED" ? styles.gateChipOk : styles.gateChipWait
+              }`}
+            >
+              Cổng yêu cầu bổ sung (G2): {gateStatusLabel(batchStatus.gateStatus)}
+            </span>
+            <span className={styles.gateMeta}>
+              Phiên bản đợt: v{batchStatus.batch.caseVersion} · Mã đợt{" "}
+              {shortId(batchStatus.batch.batchId)}
+            </span>
+          </div>
+
+          {batchStatus.stale ? (
+            <div className={styles.staleBanner} role="alert">
+              <span className={styles.staleBadge}>Đã cũ</span>
+              <p>Danh sách đã cũ so với khoảng trống hiện tại.</p>
+              <button
+                className="button button-secondary"
+                disabled={assembling}
+                onClick={() => void assemble()}
+                type="button"
+              >
+                {assembling ? "Đang tạo lại…" : "Tạo lại danh sách"}
+              </button>
+            </div>
+          ) : null}
+
+          {assembleError ? (
+            <div className="state-panel" role="alert">
+              <p>{assembleError}</p>
+            </div>
+          ) : null}
+
+          <GapList items={batchStatus.batch.items} />
+
+          {batchStatus.dispositions.length > 0 ? (
+            <section aria-label="Lịch sử quyết định" className={styles.history}>
+              <p className={styles.historyHeading}>Quyết định đã ghi</p>
+              {batchStatus.dispositions.map((disposition) => (
+                <div className={styles.dispoItem} key={disposition.id}>
+                  <div className={styles.dispoHead}>
+                    <span className={styles.dispoType}>
+                      {labelOrUnsupported(
+                        BATCH_DISPOSITION_TYPE_LABELS,
+                        disposition.dispositionType,
+                      )}
+                    </span>
+                    <span className={styles.dispoMeta}>
+                      {disposition.actorRole} · {formatDateTime(disposition.createdAt)}
+                    </span>
+                  </div>
+                  <p className={styles.dispoNote}>{disposition.rationale}</p>
+                </div>
+              ))}
+            </section>
+          ) : null}
+
+          {refreshError ? (
+            <div className="state-panel" role="alert">
+              <p>Đã ghi vào sổ, nhưng không tải lại được bản mới nhất: {refreshError}</p>
+              <button
+                className="button button-secondary"
+                onClick={() => void refreshBatch()}
+                type="button"
+              >
+                Tải lại
+              </button>
+            </div>
+          ) : null}
+
+          {batchStatus.stale ? (
+            <p className={styles.staleFormNote}>
+              Hãy tạo lại danh sách trước khi ghi quyết định: một quyết định trên danh sách đã
+              cũ sẽ không làm cổng đạt.
+            </p>
+          ) : (
+            <BatchDispositionForm
+              batch={batchStatus.batch}
+              onReload={() => void refreshBatch()}
+              onSubmit={(input) => recordDisposition(batchStatus.batch.batchId, input)}
+            />
+          )}
+        </div>
+      ) : (
+        <div className={styles.assemblePanel}>
+          <p className={styles.assembleLead}>
+            {batchNotAvailable
+              ? "Chưa có danh sách yêu cầu bổ sung cho phiên bản hồ sơ này."
+              : "Không thể đọc danh sách yêu cầu bổ sung."}
+          </p>
+          <p className={styles.assembleBody}>
+            Danh sách được lắp ráp tất định từ các khoảng trống chứng cứ đang mở khi cán bộ tiếp
+            nhận yêu cầu. Hệ thống không tự tạo danh sách khi mở trang.
+          </p>
+          <button
+            aria-busy={assembling}
+            className="button button-primary"
+            disabled={assembling}
+            onClick={() => void assemble()}
+            type="button"
+          >
+            {assembleLabel}
+          </button>
+          {assembleError ? (
+            <div className="state-panel" role="alert">
+              <p>{assembleError}</p>
+            </div>
+          ) : null}
+        </div>
+      )}
+
       {canCompleteIntake && (
-        <>
+        <div className={styles.completionArea}>
           <button
             className="button button-primary"
             onClick={() => setDialogOpen(true)}
@@ -159,17 +583,17 @@ export function GapWorkspace({
           </button>
           <IntakeCompletionDialog
             canCompleteIntake={canCompleteIntake}
+            caseId={caseId}
             caseVersion={creditCase.version}
             onClose={() => setDialogOpen(false)}
-            onConfirm={() => {
-              // Unreachable while disabled: no completion contract exists yet
-              // (submitUnavailableReason keeps confirm disabled).
+            onComplete={() => api.completeIntake(caseId)}
+            onCompleted={() => {
+              void load();
             }}
             open={dialogOpen}
-            openGapCount={0}
-            submitUnavailableReason={COMPLETION_UNAVAILABLE_REASON}
+            openGapCount={openGapCount}
           />
-        </>
+        </div>
       )}
     </>
   );

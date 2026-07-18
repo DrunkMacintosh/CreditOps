@@ -192,10 +192,69 @@ export interface ConflictListDto {
   items: ConflictDto[];
 }
 
+// ---------------------------------------------------------------------------
+// Assigned-intake completion + immutable handoff read
+// (services/api/src/creditops/api/intake.py)
+// ---------------------------------------------------------------------------
+
+export interface IntakeCompletionResultDto {
+  handoffId: string;
+  caseVersion: number;
+  state: string;
+  created: boolean;
+}
+
+// GET /handoffs is version-scoped: a returned handoff is always for the current
+// case version, so there is no staleness flag and no evidence counts here.
+export interface HandoffDto {
+  handoffId: string;
+  state: string;
+  caseVersion: number;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Cursor-paginated case audit timeline
+// (services/api/src/creditops/api/audit.py)
+// ---------------------------------------------------------------------------
+
+export interface AuditEventDto {
+  id: string;
+  caseVersion: number;
+  eventType: string;
+  actorType: string;
+  actorId: string | null;
+  artifactType: string;
+  artifactId: string;
+  // Metadata only (never a secret/prompt), rendered as plain text — never HTML.
+  eventData: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AuditEventListDto {
+  events: AuditEventDto[];
+  nextCursor: string | null;
+}
+
 export interface CaseApi {
   listCases(): Promise<CreditCaseListDto>;
   getCase(caseId: string): Promise<CreditCaseDto>;
   createCase(request: CreateCaseRequestDto): Promise<CreditCaseDto>;
+}
+
+export interface IntakeApi {
+  // POST with an empty body. Throws on 409 INTAKE_INCOMPLETE; the unresolved
+  // reasons ride on the thrown ApiClientError's `details.reasons`.
+  completeIntake(caseId: string): Promise<IntakeCompletionResultDto>;
+  getHandoff(caseId: string): Promise<HandoffDto>;
+}
+
+export interface AuditApi {
+  listAuditEvents(
+    caseId: string,
+    cursor?: string | null,
+    limit?: number,
+  ): Promise<AuditEventListDto>;
 }
 
 export interface UploadApi {
@@ -219,4 +278,4 @@ export interface ReviewApi {
   listConflicts(caseId: string): Promise<ConflictListDto>;
 }
 
-export type CreditOpsApi = CaseApi & UploadApi & ReviewApi;
+export type CreditOpsApi = CaseApi & UploadApi & ReviewApi & IntakeApi & AuditApi;

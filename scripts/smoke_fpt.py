@@ -3,6 +3,12 @@
 This script never uses a fake response and never falls back to another
 provider.  Without a complete configured catalog it exits with a visible
 ``SKIP`` so local verification cannot be mistaken for live-provider evidence.
+
+It builds its catalog through ``FPTCatalog.for_benchmark_evaluation`` — the
+explicitly named evaluation-only path — because this run is what PRODUCES the
+benchmark evidence; a PASS printed here is smoke evidence for one endpoint,
+not a benchmark-pass record.  Application routes stay DISABLED until a record
+is committed to ``creditops.infrastructure.fpt.benchmark_records``.
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ from creditops.infrastructure.fpt.gateway import FPTInferenceGateway
 
 async def main() -> int:
     try:
-        catalog = FPTCatalog.from_configuration()
+        catalog = FPTCatalog.for_benchmark_evaluation()
         catalog.config_for("reasoning")
     except (ValueError, KeyError) as exc:
         print(f"SKIP: FPT reasoning endpoint is not fully configured ({exc})")

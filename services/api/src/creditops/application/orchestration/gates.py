@@ -14,17 +14,23 @@ the human-facing disposition API (``api/risk_review.py``) after it records a
 disposition — never by the Independent Risk Review Agent itself.  The checker
 processor never imports or calls this function.
 
-``derive_g2_status`` and ``derive_g4_status`` extend the same pattern for the
-Credit Operations Agent's two human-approval surfaces: G2 (document-request
-approval, mirrored from ``G2_GAP_REQUEST_APPROVAL``'s existing role gating
-INDEPENDENT_RISK_REVIEW readiness) and G4 (``G4_OPS_AUTHORIZATION``, action
-authorization).  Both are derived here but WRITTEN only by
-``api/credit_ops.py`` after it records a human approval/authorization record
-— never by the Credit Operations Agent's worker processor, which never
-imports or calls either function.  Writing G2 here does not change how
-INDEPENDENT_RISK_REVIEW's own readiness is evaluated (application/orchestration/
-readiness.py still reads whatever G2 status is stored for the case version,
-regardless of which human-facing endpoint wrote it); ``ensure_gate`` is an
+``G2_GAP_REQUEST_APPROVAL`` is NO LONGER derived here.  It is the pre-Risk
+Evidence-Gap workflow gate (the ``HG_OUTBOUND_REQUEST_APPROVED`` capability,
+master design section 9): it is derived ONLY from a ``GapRequestBatch`` plus a
+human disposition, by ``domain/gap_request_batches.derive_g2_from_batch``, and
+WRITTEN only by ``api/gap_requests.py``.  It no longer references the credit-ops
+package in any way -- the old package-based G2 derivation and its credit-ops
+writer have both been deleted, which is what breaks the
+Risk-waits-on-Credit-Operations cycle.  ``INDEPENDENT_RISK_REVIEW`` still gates
+on the STORED G2 status for the case version (readiness.py reads whatever is
+stored, regardless of which endpoint wrote it), so a satisfied G2 recorded from
+a batch disposition -- with zero credit-ops packages anywhere -- makes Risk
+ready.
+
+``derive_g4_status`` keeps the Credit Operations pattern for G4
+(``G4_OPS_AUTHORIZATION``, action authorization): derived here, WRITTEN only by
+``api/credit_ops.py`` after it records a human authorization record -- never by
+the Credit Operations Agent's worker processor.  ``ensure_gate`` is an
 idempotent insert-if-absent-then-satisfy-only-if-OPEN write, so an additional
 writer for the same gate type is always safe.
 """
@@ -44,6 +50,14 @@ INTAKE_DISPOSITION_REF = "intake-handoff"
 #: requires its own human disposition before G3 may derive SATISFIED.
 G3_SEVERITY_THRESHOLD: ChallengeSeverity = ChallengeSeverity.HIGH
 
+#: PROPOSED synthetic configuration -- no official SHB disposition taxonomy
+#: exists.  "Đã disposition" is NOT "được tiếp tục" (master design section
+#: 6): only these continue-authorizing types may satisfy
+#: ``G3_RISK_DISPOSITION``.  ``MAKER_MUST_REVISE`` demands a maker revision
+#: (Credit Operations must never open from it) and ``ESCALATED`` awaits a
+#: higher-authority outcome; both leave the gate OPEN, fail closed.
+G3_CONTINUE_DISPOSITION_TYPES: frozenset[str] = frozenset({"NOTED", "ACCEPTED_RISK"})
+
 _SEVERITY_ORDER: Mapping[ChallengeSeverity, int] = {
     ChallengeSeverity.LOW: 0,
     ChallengeSeverity.MEDIUM: 1,
@@ -56,6 +70,83 @@ ALL_GATES: tuple[GateType, ...] = (
     GateType.G2_GAP_REQUEST_APPROVAL,
     GateType.G3_RISK_DISPOSITION,
     GateType.G4_OPS_AUTHORIZATION,
+    # Stage 2 (master design section 5 stage 2): the financing-need confirmation
+    # gate.  It takes the SAME stored-status-only, default-OPEN path below as
+    # G2/G3/G4 -- the engine never satisfies it; only an authorized human
+    # (api/financing.py confirm) can.  It is intentionally NOT a required_gate on
+    # any task-graph node (application/orchestration/graph.py), so adding it here
+    # records/surfaces its state without blocking any existing node.  PROPOSED:
+    # coupling intake-completion to it is a deferred decision, not wired yet.
+    GateType.HG_FINANCING_NEED_CONFIRMED,
+    # Stage 4 & 5 (master design section 5 giai đoạn 4-5): the two specialist
+    # human-review gates and the maker-submission gate.  Each takes the SAME
+    # stored-status-only, default-OPEN path below as G2/G3/G4/HG_FINANCING -- the
+    # engine never satisfies them; only an authorized human (api/underwriting.py
+    # review/submit, api/legal.py review) can.  Like HG_FINANCING_NEED_CONFIRMED
+    # they are intentionally NOT a required_gate on any task-graph node
+    # (application/orchestration/graph.py), so adding them here records/surfaces
+    # their state without blocking any existing node.  PROPOSED: coupling
+    # downstream readiness to them is a deferred decision, not wired yet.
+    GateType.HG_UNDERWRITING_ASSESSMENT_REVIEWED,
+    GateType.HG_LEGAL_ASSESSMENT_REVIEWED,
+    GateType.HG_MAKER_SUBMISSION_CONFIRMED,
+    # Stage 7 (master design section 5 giai đoạn 7): the credit-notification
+    # approval gate.  It takes the SAME stored-status-only, default-OPEN path
+    # below as the other HG_ gates -- the engine never satisfies it; only an
+    # authorized human (api/notifications.py approve) can.  It is intentionally
+    # NOT a required_gate on any task-graph node
+    # (application/orchestration/graph.py); it records/surfaces human approval
+    # state and gates the (mock) delivery, never an existing node.  PROPOSED
+    # synthetic gate name; no official SHB mapping.
+    GateType.HG_CREDIT_NOTIFICATION_APPROVED,
+    # Stage 9 (master design section 5 giai đoạn 9): the per-asset security-
+    # perfection confirmation gate.  Same stored-status-only, default-OPEN path as
+    # the other HG_ gates -- the engine never satisfies it; only an authorized
+    # independent OPS checker (api/security_interests.py confirm) can, and only
+    # once every interest has >=1 requirement and every requirement is
+    # COMPLETED / NOT_REQUIRED_BY_HUMAN with evidence.  Intentionally NOT a
+    # required_gate on any task-graph node (application/orchestration/graph.py);
+    # PROPOSED synthetic gate name, no official SHB mapping.
+    GateType.HG_SECURITY_PERFECTION_CONFIRMED,
+    # Stage 10 (master design section 5 giai đoạn 10): the disbursement-conditions
+    # confirmation gate.  It takes the SAME stored-status-only, default-OPEN path
+    # below as the other HG_ gates -- the engine never satisfies it; only an
+    # authorized independent OPS checker (api/conditions.py confirm) can, and
+    # only once every condition is VERIFIED / WAIVED_BY_HUMAN /
+    # NOT_APPLICABLE_BY_HUMAN.  Intentionally NOT a required_gate on any
+    # task-graph node (application/orchestration/graph.py); PROPOSED synthetic
+    # gate name, no official SHB mapping.
+    GateType.HG_DISBURSEMENT_CONDITIONS_CONFIRMED,
+    # Stage 8 (master design section 5 giai đoạn 8): the three contract signing
+    # gates.  Each takes the SAME stored-status-only, default-OPEN path below --
+    # the engine never satisfies them; only an authorized human (api/
+    # contract_packages.py approve / signature-authority / sign) can.  Like the
+    # other HG_ gates they are NOT required_gate on any task-graph node, so adding
+    # them here records/surfaces their state without blocking any existing node.
+    GateType.HG_CONTRACT_PACKAGE_APPROVED,
+    GateType.HG_SIGNATURE_AUTHORITY_CONFIRMED,
+    GateType.HG_CONTRACTS_SIGNED,
+    # Stage 11 (master design section 5 giai đoạn 11): the two SEPARATE
+    # disbursement human gates -- validation then authorization -- which MUST be
+    # satisfied by DIFFERENT actors (maker-checker / authority split).  Each takes
+    # the SAME stored-status-only, default-OPEN path below as the other HG_ gates:
+    # the engine never satisfies them; only authorized humans (api/disbursements.py
+    # validate / authorize) can, and the mock execution adapter runs ONLY after
+    # BOTH are SATISFIED.  Intentionally NOT a required_gate on any task-graph node
+    # (application/orchestration/graph.py); PROPOSED synthetic gate names, no
+    # official SHB mapping.
+    GateType.HG_DISBURSEMENT_VALIDATED,
+    GateType.HG_DISBURSEMENT_AUTHORIZED,
+    # Stage 14 (master design section 5 giai đoạn 14): the settlement-confirmation
+    # gate and the recovery-strategy-approval gate.  Each takes the SAME
+    # stored-status-only, default-OPEN path below as the other HG_ gates -- the
+    # engine never satisfies them; only an authorized human (api/
+    # settlement_recovery.py confirm / approve-strategy) can, and the recovery gate
+    # requires a DIFFERENT actor than the escalator.  Intentionally NOT a
+    # required_gate on any task-graph node (application/orchestration/graph.py);
+    # PROPOSED synthetic gate names, no official SHB mapping.
+    GateType.HG_SETTLEMENT_CONFIRMED,
+    GateType.HG_RECOVERY_STRATEGY_APPROVED,
 )
 
 
@@ -103,8 +194,8 @@ def derive_g3_status(
     *,
     assessment_exists: bool,
     challenge_severities: Mapping[UUID, ChallengeSeverity],
-    disposed_challenge_ids: Set[UUID],
-    has_assessment_level_disposition: bool,
+    latest_challenge_dispositions: Mapping[UUID, str],
+    latest_assessment_level_disposition: str | None,
     severity_threshold: ChallengeSeverity = G3_SEVERITY_THRESHOLD,
 ) -> GateStatus:
     """Whether G3_RISK_DISPOSITION MAY derive SATISFIED right now.
@@ -114,16 +205,21 @@ def derive_g3_status(
     - a checker (Independent Risk Review) assessment exists for the case
       version -- silence is never satisfaction, an empty/never-run review
       cannot satisfy the gate;
-    - every challenge at or above ``severity_threshold`` has its own human
-      disposition (``disposed_challenge_ids``); and
+    - every challenge at or above ``severity_threshold`` has a human
+      disposition whose LATEST type is continue-authorizing
+      (``G3_CONTINUE_DISPOSITION_TYPES``) -- a MAKER_MUST_REVISE or
+      ESCALATED latest disposition leaves the gate OPEN because "đã
+      disposition" is not "được tiếp tục"; and
     - when there are ZERO such severe challenges, an explicit
-      assessment-level human disposition still exists (a human NOTED the
-      empty-challenge outcome) -- G3 can never derive SATISFIED purely
-      because the checker happened to find nothing severe.
+      assessment-level human disposition with a continue-authorizing type
+      still exists (a human NOTED the empty-challenge outcome) -- G3 can
+      never derive SATISFIED purely because the checker happened to find
+      nothing severe.
 
     The checker's own output can never satisfy this on its own: every path
-    to SATISFIED requires at least one entry in ``disposed_challenge_ids`` or
-    ``has_assessment_level_disposition``, both of which are populated
+    to SATISFIED requires at least one entry in
+    ``latest_challenge_dispositions`` or a non-``None``
+    ``latest_assessment_level_disposition``, both of which are populated
     exclusively from ``challenge_dispositions`` rows -- append-only, human-
     authored, actor-and-role-captured (supabase/migrations/202607180005_
     risk_review.sql).
@@ -139,32 +235,18 @@ def derive_g3_status(
     if severe_ids:
         return (
             GateStatus.SATISFIED
-            if severe_ids <= set(disposed_challenge_ids)
+            if all(
+                latest_challenge_dispositions.get(challenge_id)
+                in G3_CONTINUE_DISPOSITION_TYPES
+                for challenge_id in severe_ids
+            )
             else GateStatus.OPEN
         )
-    return GateStatus.SATISFIED if has_assessment_level_disposition else GateStatus.OPEN
-
-
-def derive_g2_status(
-    *,
-    package_exists: bool,
-    request_ids: Set[UUID],
-    approved_request_ids: Set[UUID],
-) -> GateStatus:
-    """Whether G2_GAP_REQUEST_APPROVAL MAY derive SATISFIED for the credit-ops
-    document-request batch attached to the latest package.
-
-    SATISFIED requires a credit-ops package to exist for the case version AND
-    every drafted document request in it to have its own human approval
-    record (``request_ids <= approved_request_ids``; vacuously true when
-    there are zero drafted requests -- there is nothing to approve).  No
-    credit-ops agent code calls this; only the human-facing approval
-    endpoint (``api/credit_ops.py``) does, after it records an approval.
-    """
-
-    if not package_exists:
-        return GateStatus.OPEN
-    return GateStatus.SATISFIED if request_ids <= approved_request_ids else GateStatus.OPEN
+    return (
+        GateStatus.SATISFIED
+        if latest_assessment_level_disposition in G3_CONTINUE_DISPOSITION_TYPES
+        else GateStatus.OPEN
+    )
 
 
 def derive_g4_status(

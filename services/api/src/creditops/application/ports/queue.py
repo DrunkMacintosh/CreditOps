@@ -117,6 +117,18 @@ class TaskRepository(Protocol):
         lease_until: datetime,
     ) -> bool: ...
 
+    async def reclaim_stranded(self, *, now: datetime) -> tuple[UUID, ...]:
+        """Recover tasks a crashed worker left ``RUNNING`` past their lease.
+
+        Every task with ``status = 'RUNNING'`` whose ``lease_until <= now`` is
+        reset with the SAME attempt/backoff policy as :meth:`retry_or_fail`:
+        below ``max_attempts`` it becomes ``RETRY_WAIT`` with a backoff
+        ``available_at`` and a cleared lease (so a later :meth:`claim`
+        succeeds); at/above ``max_attempts`` it becomes
+        ``FAILED_MANUAL_REVIEW``.  Returns the reclaimed task ids.
+        """
+        ...
+
     async def claim(
         self,
         *,

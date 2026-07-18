@@ -1,5 +1,7 @@
 import type {
   ApiErrorDto,
+  AuditEventDto,
+  AuditEventListDto,
   CandidateFactDto,
   CaseCapabilities,
   CompleteUploadResponseDto,
@@ -12,6 +14,8 @@ import type {
   DocumentReviewDto,
   DocumentStage,
   EvidenceListDto,
+  HandoffDto,
+  IntakeCompletionResultDto,
   PageRegionDto,
   TaskStatus,
   TaskStatusDto,
@@ -409,4 +413,52 @@ export function parseApiError(value: unknown): ApiErrorDto | null {
   } catch {
     return null;
   }
+}
+
+export function parseIntakeCompletion(value: unknown): IntakeCompletionResultDto {
+  const raw = record(value, "hoàn tất tiếp nhận");
+  return {
+    handoffId: string(raw.handoffId, "mã bàn giao"),
+    caseVersion: positiveInteger(raw.caseVersion, "phiên bản hồ sơ"),
+    state: string(raw.state, "trạng thái bàn giao"),
+    created: boolean(raw.created, "cờ tạo mới"),
+  };
+}
+
+export function parseHandoff(value: unknown): HandoffDto {
+  const raw = record(value, "bàn giao");
+  return {
+    handoffId: string(raw.handoffId, "mã bàn giao"),
+    state: string(raw.state, "trạng thái bàn giao"),
+    caseVersion: positiveInteger(raw.caseVersion, "phiên bản hồ sơ"),
+    createdAt: string(raw.createdAt, "thời điểm tạo"),
+  };
+}
+
+function parseAuditEvent(value: unknown): AuditEventDto {
+  const raw = record(value, "sự kiện nhật ký");
+  const eventData =
+    typeof raw.eventData === "object" && raw.eventData !== null && !Array.isArray(raw.eventData)
+      ? (raw.eventData as Record<string, unknown>)
+      : {};
+  return {
+    id: string(raw.id, "mã sự kiện"),
+    caseVersion: positiveInteger(raw.caseVersion, "phiên bản hồ sơ"),
+    eventType: string(raw.eventType, "loại sự kiện"),
+    actorType: string(raw.actorType, "loại tác nhân"),
+    actorId: nullableString(raw.actorId),
+    artifactType: string(raw.artifactType, "loại đối tượng"),
+    artifactId: string(raw.artifactId, "mã đối tượng"),
+    eventData,
+    createdAt: string(raw.createdAt, "thời điểm tạo"),
+  };
+}
+
+export function parseAuditEventList(value: unknown): AuditEventListDto {
+  const raw = record(value, "nhật ký hồ sơ");
+  const events = Array.isArray(raw.events) ? raw.events.map(parseAuditEvent) : [];
+  return {
+    events,
+    nextCursor: nullableString(raw.nextCursor),
+  };
 }

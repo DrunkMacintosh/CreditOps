@@ -18,6 +18,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </span>
         </Link>
         <nav aria-label="Điều hướng chính" className="primary-nav">
+          <Link href="/cong-viec">Hàng việc của tôi</Link>
           <Link href="/ho-so">Hồ sơ</Link>
         </nav>
       </header>

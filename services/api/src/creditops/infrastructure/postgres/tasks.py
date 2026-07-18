@@ -32,6 +32,13 @@ class ConnectionFactory(Protocol):
     def __call__(self) -> AbstractAsyncContextManager[DatabaseConnection]: ...
 
 
+#: Base retry delay for the stranded-task recovery sweep.  ``reclaim_stranded``
+#: is a slot-scoped sweep with no per-worker configuration, so it mirrors the
+#: worker's default ``retry_base_delay_seconds`` (see ``RunWorkerOnce``) to keep
+#: the backoff identical to the retry a live worker would have applied.
+_RECLAIM_RETRY_BASE_DELAY_SECONDS = 30
+
+
 class PostgresTaskRepository(TaskRepository):
     def __init__(self, connection_factory: ConnectionFactory) -> None:
         self._connection_factory = connection_factory
@@ -358,6 +365,40 @@ class PostgresTaskRepository(TaskRepository):
         if row is None:
             raise TaskLeaseLost("task lease is no longer owned")
         return RetryDecision(TaskStatus(str(row[0])), int(row[1]), row[2], reason)
+
+    async def reclaim_stranded(self, *, now: datetime) -> tuple[UUID, ...]:
+        # A worker that crashed mid-run leaves its task ``RUNNING`` with a
+        # lease that eventually expires; ``claim`` only matches PENDING/
+        # RETRY_WAIT, so without this sweep the row is never reclaimable and its
+        # queue message redelivers forever.  The reset mirrors ``retry_or_fail``
+        # exactly (same terminal-vs-backoff branch and the same power-of-two
+        # ``available_at``), keyed on the already-incremented ``attempt_count``
+        # that ``claim`` recorded.  ``lease_until <= %s`` uses the caller's
+        # ``now`` so the fence is deterministic across the sweep.
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                cursor = await connection.execute(
+                    """
+                    update public.processing_tasks
+                    set status = case when attempt_count >= max_attempts
+                                      then 'FAILED_MANUAL_REVIEW' else 'RETRY_WAIT' end,
+                        failure_reason = 'lease expired; worker presumed crashed',
+                        available_at = case when attempt_count >= max_attempts
+                                            then available_at
+                                            else %s + (
+                                              %s * power(2, greatest(attempt_count - 1, 0))
+                                            ) * interval '1 second' end,
+                        lease_token = null, lease_until = null,
+                        updated_at = clock_timestamp(),
+                        completed_at = case when attempt_count >= max_attempts
+                                           then clock_timestamp() else null end
+                    where status = 'RUNNING' and lease_until <= %s
+                    returning id
+                    """,
+                    (now, _RECLAIM_RETRY_BASE_DELAY_SECONDS, now),
+                )
+                rows = await cursor.fetchall()
+        return tuple(cast(UUID, row[0]) for row in rows)
 
 
 def _task(row: Sequence[Any]) -> TaskRecord:

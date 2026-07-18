@@ -10,23 +10,30 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from psycopg.types.json import Jsonb
 
-from creditops.application.orchestration.roles import CASE_ORCHESTRATOR_ROLE
+from creditops.application.orchestration.roles import (
+    CASE_ORCHESTRATOR_ROLE,
+    RISK_REVIEWER_ROLE,
+)
 from creditops.application.ports.orchestration import (
+    AuditEventRow,
     BlockingGap,
     CreatedTask,
     GateRecord,
     OrchestrationAuditEvent,
     OrchestrationSnapshot,
     OrchestrationTaskRow,
+    OutboxEventRow,
+    StaleCaseVersionError,
 )
 from creditops.domain.enums import TaskStatus
 from creditops.domain.orchestration import GateStatus, GateType, TaskType
+from creditops.domain.tasks import TaskEnvelopeV1
 from creditops.infrastructure.postgres.repositories import DatabaseConnection
 
 _AGENT_TASK_TYPES = tuple(
@@ -125,6 +132,137 @@ class PostgresOrchestrationRepository:
             gates=gates,
             blocking_gaps=gaps,
         )
+
+    async def bump_case_version(
+        self,
+        case_id: UUID,
+        *,
+        expected_version: int,
+        reason: str,
+        disposition_ref: str,
+        actor_id: UUID | None = None,
+    ) -> int:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                # 1. Optimistic bump.  The WHERE case_version = expected guard is
+                # the concurrency fence: if another writer already advanced the
+                # case, no row is returned and we fail closed without touching
+                # anything else.
+                cursor = await connection.execute(
+                    """
+                    update public.credit_cases
+                    set case_version = case_version + 1,
+                        updated_at = clock_timestamp()
+                    where id = %s and case_version = %s
+                    returning case_version
+                    """,
+                    (case_id, expected_version),
+                )
+                bumped = await cursor.fetchone()
+                if bumped is None:
+                    raise StaleCaseVersionError(
+                        "case version moved on before the revision bump"
+                    )
+                new_version = int(bumped[0])
+
+                # 2. Immutable audit row at the NEW version carrying the reason
+                # and the disposition provenance, in the SAME transaction.
+                await connection.execute(
+                    """
+                    insert into public.audit_events (
+                      case_id, case_version, event_type, actor_type, actor_id,
+                      artifact_type, artifact_id, event_data
+                    ) values (%s, %s, 'CASE_VERSION_BUMPED', %s, %s,
+                              'CREDIT_CASE', %s, %s)
+                    """,
+                    (
+                        case_id,
+                        new_version,
+                        f"HUMAN:{RISK_REVIEWER_ROLE}",
+                        actor_id,
+                        case_id,
+                        Jsonb(
+                            {
+                                "reason": reason,
+                                "dispositionRef": disposition_ref,
+                                "previousVersion": expected_version,
+                                "newVersion": new_version,
+                                "recordedAt": datetime.now(UTC).isoformat(),
+                            }
+                        ),
+                    ),
+                )
+
+                # 3. Re-issue the intake handoff at the new version by cloning
+                # the latest READY_FOR_SPECIALIST_REVIEW handoff from the old
+                # version.  G1 derives from ``has_intake_handoff`` scoped to the
+                # current version, so without this clone G1 would be OPEN at the
+                # new version and NOTHING would schedule -- wrong for a revision
+                # loop whose evidence base is unchanged (only the analysis must
+                # redo).  The clone preserves the original ``source_task_id`` and
+                # copies ``handoff_data`` forward (the frozen intake evidence
+                # snapshot), merging a revision-provenance note into the
+                # otherwise-immutable handoff_data -- the evidence did not change,
+                # so its provenance is carried, never fabricated.
+                #
+                # SCHEMA NOTE (boundary CLOSED by migration 202607180026):
+                # ``handoffs_task_case_fk`` originally bound (source_task_id,
+                # case_id, case_version) to ``processing_tasks``, so this clone at
+                # the NEW version had no matching task and failed closed on a live
+                # Postgres.  Cloning the intake ingestion task forward instead is
+                # impossible, not merely out of scope: a DOCUMENT_INGESTION task is
+                # document-scoped (processing_tasks_document_scope) to a
+                # ``document_version`` whose identity is unique on (document_id,
+                # version) and (storage_bucket, storage_object_key) and immutable,
+                # and the whole evidence graph is version-fenced by design
+                # (version_integrity_test.sql; confirmed_facts are derived, never
+                # inserted at a foreign version).  A handoff is a workflow
+                # provenance pointer, not evidence, so 202607180026 version-
+                # decouples exactly that pointer -- (source_task_id, case_id),
+                # still case-fenced -- and this clone is now live-Postgres valid.
+                # No evidence row is cloned here; the live version-fenced evidence
+                # stays at its intake version by design.  (The maker's
+                # ``load_evidence_view`` reads confirmed_facts at the CURRENT
+                # case_version, so on a live DB it must read intake evidence at its
+                # provenance version -- an underwriting-adapter concern outside
+                # this method.)  The single-transaction shape is proven by the
+                # contract test with a fake connection; the live-FK soundness by
+                # supabase/tests/revision_carry_test.sql.
+                await connection.execute(
+                    """
+                    insert into public.handoffs (
+                      id, case_id, case_version, source_task_id, state,
+                      handoff_schema_version, handoff_data, created_by_type,
+                      created_by_id
+                    )
+                    select %s, case_id, %s, source_task_id, state,
+                           handoff_schema_version,
+                           handoff_data || %s::jsonb,
+                           created_by_type, created_by_id
+                    from public.handoffs
+                    where case_id = %s and case_version = %s
+                      and state = 'READY_FOR_SPECIALIST_REVIEW'
+                      and stale_at is null
+                    order by created_at desc
+                    limit 1
+                    """,
+                    (
+                        uuid4(),
+                        new_version,
+                        Jsonb(
+                            {
+                                "revisionProvenance": {
+                                    "reissuedFromVersion": expected_version,
+                                    "reason": reason,
+                                    "dispositionRef": disposition_ref,
+                                }
+                            }
+                        ),
+                        case_id,
+                        expected_version,
+                    ),
+                )
+        return new_version
 
     async def ensure_gate(
         self,
@@ -247,6 +385,30 @@ class PostgresOrchestrationRepository:
                         """,
                         (case_id, case_version, task_id, dependency_id),
                     )
+                # Transactional outbox (master design 14.2): the TASK_READY
+                # event commits atomically with the task row; DispatchOutbox
+                # performs the queue send afterwards.
+                envelope = TaskEnvelopeV1(
+                    task_id=task_id,
+                    case_id=case_id,
+                    case_version=case_version,
+                    task_type=task_type,
+                    document_version_id=None,
+                )
+                await connection.execute(
+                    """
+                    insert into public.outbox_events (
+                      case_id, case_version, event_type, aggregate_type,
+                      aggregate_id, payload
+                    ) values (%s, %s, 'TASK_READY', 'PROCESSING_TASK', %s, %s)
+                    """,
+                    (
+                        case_id,
+                        case_version,
+                        task_id,
+                        Jsonb(envelope.model_dump(mode="json")),
+                    ),
+                )
         return CreatedTask(
             row=OrchestrationTaskRow(
                 task_id=task_id,
@@ -294,6 +456,57 @@ class PostgresOrchestrationRepository:
                     ),
                 )
 
+    async def load_undispatched_outbox(self, *, limit: int) -> tuple[OutboxEventRow, ...]:
+        async with self._connection_factory() as connection:
+            cursor = await connection.execute(
+                """
+                select id, case_id, case_version, event_type, payload,
+                       dispatch_attempts, dispatched_at
+                from public.outbox_events
+                where dispatched_at is null
+                order by created_at, id
+                limit %s
+                """,
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+        return tuple(
+            OutboxEventRow(
+                event_id=cast(UUID, row[0]),
+                case_id=cast(UUID, row[1]),
+                case_version=int(row[2]),
+                event_type=str(row[3]),
+                payload=cast(Mapping[str, object], row[4]),
+                dispatch_attempts=int(row[5]),
+                dispatched_at=cast("datetime | None", row[6]),
+            )
+            for row in rows
+        )
+
+    async def mark_outbox_dispatched(self, event_id: UUID) -> None:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    update public.outbox_events
+                    set dispatched_at = clock_timestamp()
+                    where id = %s and dispatched_at is null
+                    """,
+                    (event_id,),
+                )
+
+    async def record_outbox_dispatch_failure(self, event_id: UUID) -> None:
+        async with self._connection_factory() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    update public.outbox_events
+                    set dispatch_attempts = dispatch_attempts + 1
+                    where id = %s and dispatched_at is null
+                    """,
+                    (event_id,),
+                )
+
     async def append_audit(self, event: OrchestrationAuditEvent) -> None:
         event_data = dict(event.event_data)
         event_data["executionId"] = str(event.execution_id)
@@ -316,6 +529,112 @@ class PostgresOrchestrationRepository:
                         Jsonb(event_data),
                     ),
                 )
+
+    async def list_audit_events(
+        self, case_id: UUID, *, cursor: UUID | None, limit: int
+    ) -> tuple[tuple[AuditEventRow, ...], UUID | None]:
+        # Newest-first, keyset-paginated by (created_at, id) descending. The
+        # cursor row's own (created_at, id) is resolved via a subselect in
+        # this SAME query -- no separate round trip -- scoped to this case_id
+        # so a cursor for another case (or a deleted/unknown id) simply
+        # yields an empty page rather than leaking cross-case position.
+        position_clause = ""
+        params: list[object] = [case_id]
+        if cursor is not None:
+            position_clause = """
+              and (created_at, id) < (
+                select created_at, id
+                from public.audit_events
+                where id = %s and case_id = %s
+              )
+            """
+            params.extend([cursor, case_id])
+        params.append(limit + 1)
+
+        async with self._connection_factory() as connection:
+            result = await connection.execute(
+                f"""
+                select id, case_id, case_version, event_type, actor_type,
+                       actor_id, artifact_type, artifact_id, event_data,
+                       created_at
+                from public.audit_events
+                where case_id = %s
+                {position_clause}
+                order by created_at desc, id desc
+                limit %s
+                """,
+                params,
+            )
+            rows = await result.fetchall()
+
+        records = tuple(_audit_event_from_row(row) for row in rows)
+        page = records[:limit]
+        next_cursor = page[-1].id if len(records) > limit else None
+        return page, next_cursor
+
+    async def list_audit_events_all(
+        self,
+        *,
+        cursor: UUID | None,
+        limit: int,
+        event_type: str | None = None,
+    ) -> tuple[tuple[AuditEventRow, ...], UUID | None]:
+        # Cross-case sibling of ``list_audit_events`` for the auditor surface
+        # (spec 17.3).  Identical keyset shape -- newest-first by (created_at,
+        # id) descending, cursor's own (created_at, id) resolved via a subselect
+        # in this SAME query, limit+1 next-page detection -- but UNSCOPED by
+        # case, so an auditor sees the whole-estate timeline.  The optional
+        # ``event_type`` is an exact-match filter validated at the API boundary.
+        filters: list[str] = []
+        params: list[object] = []
+        if event_type is not None:
+            filters.append("event_type = %s")
+            params.append(event_type)
+        if cursor is not None:
+            # The cursor row is resolved unscoped (the auditor spans all cases);
+            # an unknown/deleted id yields an empty position and thus no rows.
+            filters.append(
+                "(created_at, id) < (select created_at, id"
+                " from public.audit_events where id = %s)"
+            )
+            params.append(cursor)
+        where_clause = f"where {' and '.join(filters)}" if filters else ""
+        params.append(limit + 1)
+
+        async with self._connection_factory() as connection:
+            result = await connection.execute(
+                f"""
+                select id, case_id, case_version, event_type, actor_type,
+                       actor_id, artifact_type, artifact_id, event_data,
+                       created_at
+                from public.audit_events
+                {where_clause}
+                order by created_at desc, id desc
+                limit %s
+                """,
+                params,
+            )
+            rows = await result.fetchall()
+
+        records = tuple(_audit_event_from_row(row) for row in rows)
+        page = records[:limit]
+        next_cursor = page[-1].id if len(records) > limit else None
+        return page, next_cursor
+
+
+def _audit_event_from_row(row: Sequence[Any]) -> AuditEventRow:
+    return AuditEventRow(
+        id=cast(UUID, row[0]),
+        case_id=cast(UUID, row[1]),
+        case_version=int(row[2]),
+        event_type=str(row[3]),
+        actor_type=str(row[4]),
+        actor_id=cast("UUID | None", row[5]),
+        artifact_type=str(row[6]),
+        artifact_id=cast(UUID, row[7]),
+        event_data=cast(Mapping[str, object], row[8]),
+        created_at=cast(datetime, row[9]),
+    )
 
 
 def _gate(row: Sequence[Any]) -> GateRecord:

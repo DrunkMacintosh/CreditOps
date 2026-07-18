@@ -24,8 +24,14 @@ OFFICER_B = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
 
 
 class FakeCaseRepository:
-    def __init__(self, records: dict[UUID, CaseRecord]) -> None:
+    def __init__(
+        self,
+        records: dict[UUID, CaseRecord],
+        roles: dict[tuple[UUID, UUID], set[str]],
+    ) -> None:
         self.records = records
+        # Server-side case assignment roles keyed by (case_id, officer_id).
+        self.roles = roles
 
     async def create(
         self,
@@ -45,11 +51,13 @@ class FakeCaseRepository:
             created_at=datetime.now(UTC),
         )
         self.records[record.id] = record
+        # Create self-assigns the actor as INTAKE_OFFICER, mirroring the migration default.
+        self.roles.setdefault((record.id, assigned_officer_id), set()).add("INTAKE_OFFICER")
         return record
 
     async def require_assigned(self, case_id: UUID, actor_id: UUID) -> CaseRecord:
         record = self.records.get(case_id)
-        if record is None or record.assigned_officer_id != actor_id:
+        if record is None or (case_id, actor_id) not in self.roles:
             raise ForbiddenError
         return record
 
@@ -63,7 +71,11 @@ class FakeCaseRepository:
         self, actor_id: UUID, *, cursor: UUID | None, limit: int
     ) -> tuple[list[CaseRecord], UUID | None]:
         records = sorted(
-            (record for record in self.records.values() if record.assigned_officer_id == actor_id),
+            (
+                record
+                for record in self.records.values()
+                if (record.id, actor_id) in self.roles
+            ),
             key=lambda record: (record.created_at, record.id),
             reverse=True,
         )
@@ -76,6 +88,9 @@ class FakeCaseRepository:
         page = records[:limit]
         next_cursor = page[-1].id if len(records) > limit else None
         return page, next_cursor
+
+    async def list_assignment_roles(self, case_id: UUID, actor_id: UUID) -> frozenset[str]:
+        return frozenset(self.roles.get((case_id, actor_id), set()))
 
 
 class FakeAuditRepository:
@@ -91,8 +106,9 @@ class FakeUnitOfWork:
         self,
         records: dict[UUID, CaseRecord],
         events: list[AuditEvent],
+        roles: dict[tuple[UUID, UUID], set[str]],
     ) -> None:
-        self.cases = FakeCaseRepository(records)
+        self.cases = FakeCaseRepository(records, roles)
         self.audit = FakeAuditRepository(events)
 
     async def __aenter__(self) -> FakeUnitOfWork:
@@ -111,12 +127,13 @@ class FakeUnitOfWorkFactory:
     def __init__(self) -> None:
         self.records: dict[UUID, CaseRecord] = {}
         self.events: list[AuditEvent] = []
+        self.roles: dict[tuple[UUID, UUID], set[str]] = {}
         self.calls = 0
 
     def __call__(self, actor: Any) -> FakeUnitOfWork:
         del actor
         self.calls += 1
-        return FakeUnitOfWork(self.records, self.events)
+        return FakeUnitOfWork(self.records, self.events, self.roles)
 
 
 @pytest.fixture
@@ -196,6 +213,7 @@ def test_missing_token_returns_flat_vietnamese_api_error(client: TestClient) -> 
         "messageVi": "Yêu cầu xác thực hợp lệ.",
         "correlationId": response.json()["correlationId"],
         "retryable": False,
+        "details": {},
     }
 
 
@@ -235,7 +253,7 @@ def test_invalid_signed_tokens_are_rejected_without_details(
 
     assert response.status_code == 401
     assert response.json()["code"] == "AUTHENTICATION_REQUIRED"
-    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable"}
+    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable", "details"}
 
 
 def test_token_without_subject_is_rejected(
@@ -367,7 +385,7 @@ def test_other_officer_cannot_distinguish_case_from_missing_case(
     assert forbidden.status_code == missing.status_code == 404
     assert forbidden.json()["code"] == missing.json()["code"] == "CASE_NOT_ACCESSIBLE"
     assert forbidden.json()["messageVi"] == missing.json()["messageVi"]
-    assert set(forbidden.json()) == {"code", "messageVi", "correlationId", "retryable"}
+    assert set(forbidden.json()) == {"code", "messageVi", "correlationId", "retryable", "details"}
 
 
 def test_non_intake_role_cannot_create_case(
@@ -398,4 +416,90 @@ def test_validation_error_uses_flat_vietnamese_contract(
 
     assert response.status_code == 422
     assert response.json()["code"] == "VALIDATION_ERROR"
-    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable"}
+    assert set(response.json()) == {"code", "messageVi", "correlationId", "retryable", "details"}
+
+
+def test_capabilities_endpoint_assigned_intake_officer_gets_true_capabilities(
+    client: TestClient,
+    signing_key: rsa.RSAPrivateKey,
+) -> None:
+    token = make_token(signing_key)
+    created = client.post(
+        "/api/v1/cases",
+        headers=authorization(token),
+        json={"requestedAmount": "1", "purpose": "Vốn lưu động"},
+    )
+
+    response = client.get(
+        f"/api/v1/cases/{created.json()['id']}/capabilities",
+        headers=authorization(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "caseRoles": ["INTAKE_OFFICER"],
+        "canUpload": True,
+        "canConfirm": True,
+        "canCompleteIntake": True,
+    }
+
+
+def test_capabilities_endpoint_assigned_non_intake_role_gets_false_mutation_capabilities(
+    client: TestClient,
+    signing_key: rsa.RSAPrivateKey,
+    uow_factory: FakeUnitOfWorkFactory,
+) -> None:
+    created = client.post(
+        "/api/v1/cases",
+        headers=authorization(make_token(signing_key)),
+        json={"requestedAmount": "1", "purpose": "Vốn lưu động"},
+    )
+    case_id = UUID(created.json()["id"])
+    # Assignment/delegation is an audited server command; here we seed OFFICER_B as an
+    # UNDERWRITER on the case directly to exercise a non-intake case role.
+    uow_factory.roles[(case_id, OFFICER_B)] = {"UNDERWRITER"}
+
+    response = client.get(
+        f"/api/v1/cases/{case_id}/capabilities",
+        headers=authorization(make_token(signing_key, subject=OFFICER_B, roles=["UNDERWRITER"])),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "caseRoles": ["UNDERWRITER"],
+        "canUpload": False,
+        "canConfirm": False,
+        "canCompleteIntake": False,
+    }
+
+
+def test_capabilities_endpoint_unassigned_actor_is_indistinguishable_from_missing(
+    client: TestClient,
+    signing_key: rsa.RSAPrivateKey,
+) -> None:
+    created = client.post(
+        "/api/v1/cases",
+        headers=authorization(make_token(signing_key)),
+        json={"requestedAmount": "1", "purpose": "Vốn lưu động"},
+    )
+    other_headers = authorization(make_token(signing_key, subject=OFFICER_B))
+
+    forbidden = client.get(
+        f"/api/v1/cases/{created.json()['id']}/capabilities",
+        headers=other_headers,
+    )
+    missing = client.get(f"/api/v1/cases/{uuid4()}/capabilities", headers=other_headers)
+
+    assert forbidden.status_code == missing.status_code == 404
+    assert forbidden.json()["code"] == missing.json()["code"] == "CASE_NOT_ACCESSIBLE"
+    assert forbidden.json()["messageVi"] == missing.json()["messageVi"]
+    assert set(forbidden.json()) == {"code", "messageVi", "correlationId", "retryable", "details"}
+
+
+def test_openapi_capabilities_endpoint_exposes_case_roles_and_mutation_flags(
+    client: TestClient,
+) -> None:
+    schema = client.get("/openapi.json").json()
+
+    properties = schema["components"]["schemas"]["CaseCapabilitiesResponse"]["properties"]
+    assert set(properties) == {"caseRoles", "canUpload", "canConfirm", "canCompleteIntake"}

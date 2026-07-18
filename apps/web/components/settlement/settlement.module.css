@@ -1,0 +1,211 @@
+/* Stage-14 settlement (14A) + recovery (14B) workspace. Specialized layout on
+   top of the shared gates.module.css form/section/list primitives; reuses the
+   same design tokens (globals.css / evidence-desk system). */
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+}
+
+.meta {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+}
+
+.branchTitle {
+  margin: 1.5rem 0 0;
+  color: var(--ink, #14261f);
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Label/value grid: derived 409 details and snapshot echoes. */
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.75rem 1.25rem;
+  margin: 0;
+  padding: 0;
+}
+
+.detailItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.detailLabel {
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.detailValue {
+  color: var(--ink, #14261f);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+/* Ineligibility / not-triggered blocking banner (distinct 409 branches). */
+.ineligibleBanner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--risk, #8f2f23);
+  border-left: 0.3rem solid var(--risk, #8f2f23);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--risk-soft, #faeeea);
+}
+
+.ineligibleTitle {
+  margin: 0;
+  color: var(--risk, #8f2f23);
+  font-size: 0.9375rem;
+  font-weight: 750;
+}
+
+/* Labelled MOCK receipts. */
+.receiptList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.85rem 1rem;
+  border: 1px dashed var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--canvas, #f4f5f3);
+}
+
+.receiptHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+}
+
+.receiptKind {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+
+.mockBadge {
+  display: inline-flex;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.375rem;
+  background: var(--amber-soft, #fff7e8);
+  color: #503b18;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.receiptNote {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* Recovery option editor rows. */
+.optionEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-left: 0.2rem solid var(--info, #31566b);
+  border-radius: 0.5rem;
+  background: var(--canvas, #f4f5f3);
+}
+
+.optionEditorHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.optionEditorTitle {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.optionList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0;
+  padding: 0.75rem 0 0;
+  border-top: 1px solid var(--line, #c9d0cb);
+  list-style: none;
+}
+
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-left: 0.2rem solid var(--info, #31566b);
+  border-radius: 0.5rem;
+  background: var(--canvas, #f4f5f3);
+}
+
+.optionLabel {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.optionText {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.optionMeta {
+  margin: 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.linkButton {
+  align-self: flex-start;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: 0.4rem;
+  background: var(--card, #ffffff);
+  color: var(--ink, #14261f);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.linkButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

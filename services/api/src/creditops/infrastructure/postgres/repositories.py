@@ -227,6 +227,20 @@ class PostgresCaseRepository:
         next_cursor = page[-1].id if len(records) > limit else None
         return page, next_cursor
 
+    async def list_assignment_roles(self, case_id: UUID, actor_id: UUID) -> frozenset[str]:
+        cursor = await self._connection.execute(
+            """
+            select case_role
+            from public.case_assignments
+            where case_id = %s
+              and officer_id = %s
+              and revoked_at is null
+            """,
+            (case_id, actor_id),
+        )
+        rows = await cursor.fetchall()
+        return frozenset(cast(str, row[0]) for row in rows)
+
 
 class PostgresAuditRepository:
     def __init__(self, connection: DatabaseConnection) -> None:

@@ -33,6 +33,10 @@ class SupabaseQueue(QueuePort):
         self._connection = connection
         self._queue_name = queue_name
 
+    @property
+    def queue_name(self) -> str:
+        return self._queue_name
+
     async def send(self, envelope: TaskEnvelopeV1, *, delay_seconds: int = 0) -> int:
         if delay_seconds < 0 or delay_seconds > 86_400:
             raise QueueError("queue delay is outside the bounded contract")

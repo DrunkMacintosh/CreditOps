@@ -2,7 +2,7 @@
 
 ## Status and intent
 
-**CONFIRMED:** The current design contains six logical agent roles. These roles describe responsibilities, information access, tools, output contracts, and permissions; they do not require six separate language models. No agent or orchestration runtime has been implemented.
+**CONFIRMED:** The approved master design ([full credit-lifecycle design](superpowers/specs/2026-07-18-full-credit-lifecycle-agent-workflow-design.md), section 7.2) defines eight logical agent roles for the 14-stage lifecycle: Case Orchestrator, Relationship & Intake, Credit Underwriting, Legal/Compliance & Collateral, Independent Risk Review, Credit Operations, Post-Credit Monitoring, and Collections & Recovery. Evidence Gap Resolution remains a shared workflow capability, not a ninth agent. The six roles detailed below are the pre-approval subset exercised by the current local walking skeleton; Post-Credit Monitoring and Collections & Recovery activate only in the post-credit waves and follow the same boundaries. Roles describe responsibilities, information access, tools, output contracts, and permissions; they do not require one language model or service per role.
 
 **PROPOSED:** A benchmark-selected managed reasoning endpoint may support multiple roles through role-specific instructions, tools, data access, permissions, and structured-output schemas. Task-specific managed KIE, table, vision, embedding, and optional reranking endpoints may be used where benchmarks justify them. The roles are application-level responsibilities, not separate model servers.
 

@@ -97,6 +97,9 @@ class WorkerRunResult:
     task_id: UUID | None = None
     message_id: int | None = None
     reason: str | None = None
+    #: Case/type context for the task-success re-tick; populated on SUCCEEDED.
+    case_id: UUID | None = None
+    task_type: TaskType | None = None
 
 
 class RunWorkerOnce:
@@ -145,6 +148,12 @@ class RunWorkerOnce:
 
         message: QueueMessage | None = None
         try:
+            # Recovery sweep: reclaim tasks a crashed worker left RUNNING past
+            # their lease before reading the queue, so a redelivered message
+            # resumes from a claimable state instead of redelivering forever.
+            # The durable reset is the effect; this module has no logger, so the
+            # reclaimed ids are returned state only.
+            await self._tasks.reclaim_stranded(now=self._clock())
             message = await self._queue.read_one(
                 visibility_timeout_seconds=self._visibility_timeout_seconds
             )
@@ -276,7 +285,13 @@ class RunWorkerOnce:
                 lease_token=lease_token,
             )
             await self._queue.archive(message.message_id)
-            return WorkerRunResult(WorkerOutcome.SUCCEEDED, claimed_task.id, message.message_id)
+            return WorkerRunResult(
+                WorkerOutcome.SUCCEEDED,
+                claimed_task.id,
+                message.message_id,
+                case_id=claimed_task.case_id,
+                task_type=claimed_task.task_type,
+            )
         except (StaleTaskError, TaskLeaseLost):
             # The old delivery remains recoverable unless the database marked
             # it terminal.  Never archive a message after a stale write.

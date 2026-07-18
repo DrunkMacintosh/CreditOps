@@ -52,13 +52,15 @@ type CreditOpsPackageId = UUID
 
 CREDIT_OPS_AGENT_ROLE: Literal["CREDIT_OPERATIONS"] = "CREDIT_OPERATIONS"
 
-#: The standard synthetic-data disclaimer (AGENTS.md "Non-negotiable
-#: boundaries"), translated to Vietnamese and pinned as the ONLY value the
-#: mandatory header field may hold.
+#: The mandatory memo header: the canonical Vietnamese synthetic-data notice
+#: (``domain/synthetic_notice.py``, mirrored from
+#: ``shared/synthetic-notice.json``) followed by the memo-specific
+#: not-a-decision guard sentence.  Pinned as the ONLY value the mandatory
+#: header field may hold; tests assert it startswith the canonical notice.
 SYNTHETIC_DISCLAIMER_VI: Final = (
-    "Toan bo du lieu khach hang, chinh sach, tai lieu va phan hoi he thong "
-    "ngan hang trong du an nay la du lieu tong hop (synthetic), chi phuc vu "
-    "muc dich trinh dien; day KHONG PHAI la mot quyet dinh tin dung."
+    "Toàn bộ dữ liệu khách hàng, chính sách, tài liệu và phản hồi hệ thống "
+    "ngân hàng trong dự án này là dữ liệu tổng hợp, được tạo riêng cho mục "
+    "đích trình diễn. Đây KHÔNG PHẢI là một quyết định tín dụng."
 )
 
 #: Package-wide forbidden field names: no field anywhere in the credit-ops
@@ -288,9 +290,9 @@ class DraftCreditMemo(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     synthetic_disclaimer_vi: Literal[
-        "Toan bo du lieu khach hang, chinh sach, tai lieu va phan hoi he thong "
-        "ngan hang trong du an nay la du lieu tong hop (synthetic), chi phuc vu "
-        "muc dich trinh dien; day KHONG PHAI la mot quyet dinh tin dung."
+        "Toàn bộ dữ liệu khách hàng, chính sách, tài liệu và phản hồi hệ thống "
+        "ngân hàng trong dự án này là dữ liệu tổng hợp, được tạo riêng cho mục "
+        "đích trình diễn. Đây KHÔNG PHẢI là một quyết định tín dụng."
     ] = SYNTHETIC_DISCLAIMER_VI
     tom_tat_nhu_cau: MemoSection
     phan_tich_maker: MemoSection

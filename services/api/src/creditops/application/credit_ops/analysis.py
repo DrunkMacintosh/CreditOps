@@ -353,8 +353,19 @@ def compute_deterministic_package(
     document requests, and drafted proposed actions -- in that order, all
     pure and all BEFORE any model call."""
 
-    disposed_challenge_ids = {d.challenge_id for d in dispositions if d.challenge_id is not None}
-    has_assessment_level_disposition = any(d.challenge_id is None for d in dispositions)
+    # Dispositions arrive in recording order; the LATEST type per challenge
+    # (and at the assessment level) governs continuation, mirroring
+    # api/risk_review.py's human-triggered gate write.
+    latest_challenge_dispositions: dict[UUID, str] = {}
+    latest_assessment_level_disposition: str | None = None
+    for disposition in dispositions:
+        if disposition.challenge_id is None:
+            latest_assessment_level_disposition = disposition.disposition_type
+        else:
+            latest_challenge_dispositions[disposition.challenge_id] = (
+                disposition.disposition_type
+            )
+    disposed_challenge_ids = set(latest_challenge_dispositions)
     severities: dict[UUID, ChallengeSeverity] = (
         {challenge.id: challenge.severity for challenge in view.risk_review.challenges}
         if view.risk_review is not None
@@ -363,8 +374,8 @@ def compute_deterministic_package(
     g3_status = derive_g3_status(
         assessment_exists=view.risk_review is not None,
         challenge_severities=severities,
-        disposed_challenge_ids=disposed_challenge_ids,
-        has_assessment_level_disposition=has_assessment_level_disposition,
+        latest_challenge_dispositions=latest_challenge_dispositions,
+        latest_assessment_level_disposition=latest_assessment_level_disposition,
     )
     unresolved_challenge_count = (
         sum(

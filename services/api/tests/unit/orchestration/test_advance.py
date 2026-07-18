@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -15,6 +16,7 @@ from creditops.application.ports.orchestration import (
     OrchestrationAuditEvent,
     OrchestrationSnapshot,
     OrchestrationTaskRow,
+    OutboxEventRow,
 )
 from creditops.domain.enums import TaskStatus
 from creditops.domain.orchestration import GateStatus, GateType, TaskType
@@ -36,6 +38,7 @@ class FakeOrchestrationRepository:
         self.dependencies: list[tuple[UUID, UUID]] = []
         self.proposals: list[dict[str, object]] = []
         self.audit_events: list[OrchestrationAuditEvent] = []
+        self.outbox: list[OutboxEventRow] = []
 
     async def load_snapshot(self, case_id: UUID) -> OrchestrationSnapshot | None:
         if case_id != CASE_ID:
@@ -87,13 +90,31 @@ class FakeOrchestrationRepository:
         input_payload: Mapping[str, object],
         depends_on: tuple[UUID, ...] = (),
     ) -> CreatedTask:
-        del case_id, input_payload
+        del input_payload
         existing = self.tasks_by_key.get(idempotency_key)
         if existing is not None:
             return CreatedTask(row=existing, created=False)
         row = OrchestrationTaskRow(task_id, task_type, case_version, TaskStatus.PENDING)
         self.tasks_by_key[idempotency_key] = row
         self.dependencies.extend((task_id, dependency) for dependency in depends_on)
+        # Mirrors the Postgres adapter: the TASK_READY outbox event commits
+        # atomically with the created task row.
+        envelope = TaskEnvelopeV1(
+            task_id=task_id,
+            case_id=case_id,
+            case_version=case_version,
+            task_type=task_type,
+            document_version_id=None,
+        )
+        self.outbox.append(
+            OutboxEventRow(
+                event_id=uuid4(),
+                case_id=case_id,
+                case_version=case_version,
+                event_type="TASK_READY",
+                payload=envelope.model_dump(mode="json"),
+            )
+        )
         return CreatedTask(row=row, created=True)
 
     async def record_proposal(self, **kwargs: object) -> None:
@@ -101,6 +122,40 @@ class FakeOrchestrationRepository:
 
     async def append_audit(self, event: OrchestrationAuditEvent) -> None:
         self.audit_events.append(event)
+
+    def append_outbox_for_test(
+        self,
+        *,
+        event_id: UUID,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        self.outbox.append(
+            OutboxEventRow(
+                event_id=event_id,
+                case_id=CASE_ID,
+                case_version=self.case_version,
+                event_type=event_type,
+                payload=payload,
+            )
+        )
+
+    async def load_undispatched_outbox(self, *, limit: int) -> tuple[OutboxEventRow, ...]:
+        return tuple(
+            event for event in self.outbox if event.dispatched_at is None
+        )[:limit]
+
+    async def mark_outbox_dispatched(self, event_id: UUID) -> None:
+        for index, event in enumerate(self.outbox):
+            if event.event_id == event_id and event.dispatched_at is None:
+                self.outbox[index] = replace(event, dispatched_at=NOW)
+
+    async def record_outbox_dispatch_failure(self, event_id: UUID) -> None:
+        for index, event in enumerate(self.outbox):
+            if event.event_id == event_id and event.dispatched_at is None:
+                self.outbox[index] = replace(
+                    event, dispatch_attempts=event.dispatch_attempts + 1
+                )
 
 
 class RecordingQueue:
@@ -123,12 +178,9 @@ class RecordingQueue:
         del message_id
 
 
-def advance_case(
-    repository: FakeOrchestrationRepository, queue: RecordingQueue
-) -> AdvanceCase:
+def advance_case(repository: FakeOrchestrationRepository) -> AdvanceCase:
     return AdvanceCase(
         repository,
-        queue,
         OrchestrationPlanner(TEMPLATE, gateway=None),
         template=TEMPLATE,
         clock=lambda: NOW,
@@ -136,11 +188,10 @@ def advance_case(
 
 
 @pytest.mark.asyncio
-async def test_advance_creates_and_enqueues_only_ready_specialist_tasks() -> None:
+async def test_advance_creates_and_outboxes_only_ready_specialist_tasks() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
 
-    result = await advance_case(repository, queue).execute(CASE_ID)
+    result = await advance_case(repository).execute(CASE_ID)
 
     created_types = {
         row.task_type for row in repository.tasks_by_key.values()
@@ -149,9 +200,12 @@ async def test_advance_creates_and_enqueues_only_ready_specialist_tasks() -> Non
         TaskType.CREDIT_UNDERWRITING,
         TaskType.LEGAL_COMPLIANCE_COLLATERAL,
     }
-    assert {envelope.task_type for envelope in queue.sent} == created_types
-    assert all(envelope.document_version_id is None for envelope in queue.sent)
-    assert all(envelope.case_version == 1 for envelope in queue.sent)
+    outboxed = [
+        TaskEnvelopeV1.model_validate(dict(event.payload)) for event in repository.outbox
+    ]
+    assert {envelope.task_type for envelope in outboxed} == created_types
+    assert all(envelope.document_version_id is None for envelope in outboxed)
+    assert all(envelope.case_version == 1 for envelope in outboxed)
     # G1 was derived from the intake handoff; the human-only gates stay OPEN.
     assert repository.gates[(1, GateType.G1_INTAKE_COMPLETE)].status is GateStatus.SATISFIED
     for human_gate in (
@@ -164,27 +218,25 @@ async def test_advance_creates_and_enqueues_only_ready_specialist_tasks() -> Non
 
 
 @pytest.mark.asyncio
-async def test_duplicate_advance_produces_no_duplicate_tasks_or_messages() -> None:
+async def test_duplicate_advance_produces_no_duplicate_tasks_or_events() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
-    use_case = advance_case(repository, queue)
+    use_case = advance_case(repository)
 
     first = await use_case.execute(CASE_ID)
     second = await use_case.execute(CASE_ID)
 
     assert len(first.created_task_ids) == 2
     assert second.created_task_ids == ()
-    assert second.enqueued_task_ids == ()
+    assert second.outboxed_task_ids == ()
     assert len(repository.tasks_by_key) == 2
-    assert len(queue.sent) == 2
+    assert len(repository.outbox) == 2
 
 
 @pytest.mark.asyncio
 async def test_every_orchestrator_output_carries_full_provenance() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
 
-    result = await advance_case(repository, queue).execute(CASE_ID)
+    result = await advance_case(repository).execute(CASE_ID)
 
     assert repository.audit_events, "advance must append audit events"
     for event in repository.audit_events:
@@ -206,7 +258,6 @@ async def test_every_orchestrator_output_carries_full_provenance() -> None:
 @pytest.mark.asyncio
 async def test_gate_blocked_stall_is_surfaced_as_a_deadlock_audit_event() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
     # Both makers already succeeded; risk review waits on the OPEN G2 gate, so
     # nothing is ready or running: the stall must be surfaced, never silent.
     repository.tasks_by_key["ORCH:seed:CU"] = OrchestrationTaskRow(
@@ -216,11 +267,11 @@ async def test_gate_blocked_stall_is_surfaced_as_a_deadlock_audit_event() -> Non
         uuid4(), TaskType.LEGAL_COMPLIANCE_COLLATERAL, 1, TaskStatus.SUCCEEDED
     )
 
-    result = await advance_case(repository, queue).execute(CASE_ID)
+    result = await advance_case(repository).execute(CASE_ID)
 
     assert result.deadlock is not None
     assert any("G2_GAP_REQUEST_APPROVAL" in reason for reason in result.deadlock.reasons)
-    assert queue.sent == []
+    assert repository.outbox == []
     deadlock_events = [
         event
         for event in repository.audit_events
@@ -233,12 +284,11 @@ async def test_gate_blocked_stall_is_surfaced_as_a_deadlock_audit_event() -> Non
 @pytest.mark.asyncio
 async def test_without_an_intake_handoff_no_specialist_work_starts() -> None:
     repository = FakeOrchestrationRepository(has_intake_handoff=False)
-    queue = RecordingQueue()
 
-    result = await advance_case(repository, queue).execute(CASE_ID)
+    result = await advance_case(repository).execute(CASE_ID)
 
     assert repository.tasks_by_key == {}
-    assert queue.sent == []
+    assert repository.outbox == []
     assert repository.gates[(1, GateType.G1_INTAKE_COMPLETE)].status is GateStatus.OPEN
     assert result.deadlock is not None
 
@@ -246,7 +296,6 @@ async def test_without_an_intake_handoff_no_specialist_work_starts() -> None:
 @pytest.mark.asyncio
 async def test_an_invisible_case_raises_instead_of_guessing() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
 
     with pytest.raises(CaseNotFound):
-        await advance_case(repository, queue).execute(uuid4())
+        await advance_case(repository).execute(uuid4())

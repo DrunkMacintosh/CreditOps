@@ -21,6 +21,7 @@ it, and only through this deterministic derivation.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
@@ -31,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from creditops.api.auth import require_actor
 from creditops.api.errors import ApiException
 from creditops.application.orchestration.gates import derive_g3_status
+from creditops.application.orchestration.kickoff import KickoffOrchestration
 from creditops.application.orchestration.roles import (
     CASE_PARTICIPANT_ROLES,
     RISK_REVIEWER_ROLE,
@@ -38,8 +40,11 @@ from creditops.application.orchestration.roles import (
 from creditops.application.ports.orchestration import OrchestrationRepository
 from creditops.application.ports.risk_review import RiskReviewRepository
 from creditops.application.unit_of_work import ActorContext
+from creditops.application.use_cases.dispatch_outbox import DispatchOutbox
+from creditops.application.use_cases.request_maker_revision import RequestMakerRevision
 from creditops.domain.orchestration import GateStatus, GateType
 from creditops.domain.risk_review import ChallengeSeverity
+from creditops.observability import log_event
 
 router = APIRouter(prefix="/api/v1/cases/{case_id}/risk-review", tags=["risk-review"])
 
@@ -214,8 +219,14 @@ async def get_risk_review(
     gate_status = derive_g3_status(
         assessment_exists=True,
         challenge_severities=severities,
-        disposed_challenge_ids=set(by_challenge.keys()),
-        has_assessment_level_disposition=bool(assessment_level),
+        latest_challenge_dispositions={
+            challenge_id: bound[-1].disposition_type
+            for challenge_id, bound in by_challenge.items()
+            if bound
+        },
+        latest_assessment_level_disposition=(
+            assessment_level[-1].disposition_type if assessment_level else None
+        ),
     )
 
     return RiskReviewStatusResponse(
@@ -332,6 +343,12 @@ async def _record_disposition(
     )
 
     await _maybe_satisfy_g3(request, record, actor)
+    # MAKER_MUST_REVISE never satisfies G3 (above is a no-op for it); instead it
+    # opens the forward revision loop (master design section 9).  Only a
+    # challenge-level disposition reaches here as MAKER_MUST_REVISE -- the
+    # assessment-level endpoint already rejects it with 422.
+    if challenge_id is not None and body.disposition_type == "MAKER_MUST_REVISE":
+        await _maybe_request_maker_revision(request, record, actor, disposition)
     return _disposition_response(disposition)
 
 
@@ -350,8 +367,16 @@ async def _maybe_satisfy_g3(
         return
     repository = _repository(request)
     dispositions = await repository.load_dispositions(record.case_id, record.case_version)
-    disposed_ids = {d.challenge_id for d in dispositions if d.challenge_id is not None}
-    has_assessment_level = any(d.challenge_id is None for d in dispositions)
+    # The repository returns dispositions in recording order (created_at, id):
+    # for each challenge -- and for the assessment level -- the LATEST
+    # disposition type governs whether the case may continue.
+    latest_by_challenge: dict[UUID, str] = {}
+    latest_assessment_level: str | None = None
+    for disposition in dispositions:
+        if disposition.challenge_id is None:
+            latest_assessment_level = disposition.disposition_type
+        else:
+            latest_by_challenge[disposition.challenge_id] = disposition.disposition_type
     raw_challenges = record.assessment.get("challenges", [])
     severities = {
         UUID(str(item["id"])): ChallengeSeverity(str(item["severity"]))
@@ -361,8 +386,8 @@ async def _maybe_satisfy_g3(
     status = derive_g3_status(
         assessment_exists=True,
         challenge_severities=severities,
-        disposed_challenge_ids=disposed_ids,
-        has_assessment_level_disposition=has_assessment_level,
+        latest_challenge_dispositions=latest_by_challenge,
+        latest_assessment_level_disposition=latest_assessment_level,
     )
     if status is not GateStatus.SATISFIED:
         return
@@ -374,6 +399,117 @@ async def _maybe_satisfy_g3(
         satisfied_by_actor_id=actor.actor_id,
         disposition_ref=f"risk-review-assessment:{record.assessment_id}",
     )
+    await _retick_orchestration(
+        request,
+        orchestration_repository,
+        case_id=record.case_id,
+        trigger_ref=f"G3:{record.assessment_id}",
+    )
+
+
+async def _maybe_request_maker_revision(
+    request: Request, record: Any, actor: ActorContext, disposition: Any
+) -> None:
+    """Open the maker-revision forward path after a MAKER_MUST_REVISE
+    disposition persists (master design section 9).
+
+    Bumps the case version, re-issues the intake handoff, and self-fires a
+    fresh orchestration tick (``REVISE:{disposition_id}``) so only the
+    invalidated maker/risk nodes rerun on the new version.  Best-effort and
+    guarded exactly like ``_retick_orchestration``: any failure -- including a
+    ``StaleCaseVersionError`` when the case already moved on -- is logged and
+    never fails the human's already-durable disposition.  The version bump +
+    handoff re-issue commit durably in the use case; the queue publish is the
+    best-effort ``DispatchOutbox`` step here, mirroring the G3 retick.
+    """
+
+    orchestration_repository = _orchestration_repository(request)
+    if orchestration_repository is None:
+        return
+    try:
+        result = await RequestMakerRevision(orchestration_repository).execute(
+            case_id=record.case_id,
+            expected_version=record.case_version,
+            disposition_id=disposition.id,
+            actor_id=actor.actor_id,
+            reason=disposition.rationale_vi,
+        )
+        queue = getattr(request.app.state, "agent_task_queue", None)
+        if queue is not None:
+            await DispatchOutbox(
+                orchestration_repository,
+                queue,
+                worker_dispatcher=getattr(
+                    request.app.state, "worker_dispatcher", None
+                ),
+            ).run()
+        log_event(
+            logging.getLogger(__name__),
+            logging.INFO,
+            "Maker revision requested after MAKER_MUST_REVISE disposition",
+            {
+                "event": "maker_revision_requested",
+                "previousVersion": result.previous_version,
+                "newVersion": result.new_version,
+                "planCreated": result.plan_created,
+            },
+        )
+    except Exception:
+        log_event(
+            logging.getLogger(__name__),
+            logging.ERROR,
+            "Maker revision request failed; the disposition is durable and the "
+            "case can be revised manually",
+            {"event": "maker_revision_request_failed"},
+        )
+
+
+async def _retick_orchestration(
+    request: Request,
+    orchestration_repository: Any,
+    *,
+    case_id: UUID,
+    trigger_ref: str,
+) -> None:
+    """Self-fire an idempotent orchestration tick after a gate satisfaction.
+
+    The plan task + outbox event commit durably; the queue publish is
+    best-effort here (the recovery dispatch picks up anything left).  A tick
+    failure must never fail the human's already-recorded disposition, but it
+    is logged, never silent.
+    """
+
+    try:
+        result = await KickoffOrchestration(orchestration_repository).execute(
+            case_id, trigger_ref=trigger_ref
+        )
+        queue = getattr(request.app.state, "agent_task_queue", None)
+        if queue is not None:
+            await DispatchOutbox(
+                orchestration_repository,
+                queue,
+                worker_dispatcher=getattr(
+                    request.app.state, "worker_dispatcher", None
+                ),
+            ).run()
+        log_event(
+            logging.getLogger(__name__),
+            logging.INFO,
+            "Orchestration retick after gate satisfaction",
+            {
+                "event": "orchestration_retick",
+                "trigger": trigger_ref,
+                "created": result.created,
+            },
+        )
+    except Exception:
+        log_event(
+            logging.getLogger(__name__),
+            logging.ERROR,
+            "Orchestration retick failed; the disposition is durable and the "
+            "case can be advanced manually",
+            {"event": "orchestration_retick_failed", "trigger": trigger_ref},
+        )
 
 
 def _disposition_response(disposition: Any) -> DispositionResponse:

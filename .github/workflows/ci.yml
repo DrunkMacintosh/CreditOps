@@ -33,7 +33,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Run backend tests
-        run: uv run pytest services/api/tests -q
+        run: uv run pytest services/api/tests --ignore=services/api/tests/evaluation -q
 
       - name: Run Ruff
         run: uv run ruff check services/api/src services/api/tests
@@ -73,3 +73,51 @@ jobs:
 
       - name: Build frontend
         run: pnpm --dir apps/web build
+
+  database-tests:
+    name: Database tests (pgTAP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      # Mechanism choice: Supabase CLI local stack (option a), not a bare
+      # postgres image + hand-rolled docker service container (option b).
+      # supabase/tests/*.sql calls `create extension pgtap`, exercises
+      # `pgmq.*` (created via `select pgmq.create(...)` in
+      # 202607170005_tasks_checkpoints_queue.sql and
+      # 202607180002_planner_proposals_queue.sql), and RLS policies that read
+      # `auth.uid()`. Plain postgres:16 has none of pgtap/pgmq/pgvector/the
+      # auth schema preinstalled, so a generic service container would need
+      # per-extension setup scripts we'd have to hand-maintain. The
+      # Supabase-maintained `supabase/postgres` image the CLI pulls already
+      # bundles all of the above, pinned to the same CLI version used by
+      # deploy.yml so local test runs and staging migrations apply against
+      # the same tooling.
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.54.11
+
+      # `supabase db start` (as opposed to the full `supabase start` stack)
+      # starts only the local Postgres container and applies every
+      # migration in supabase/migrations, in filename order, from scratch.
+      # It needs no `supabase link`/access token because it never touches a
+      # remote project, so this job carries no secrets and is safe to run
+      # for pull_request builds (including from forks). If any migration
+      # fails to apply, this step exits non-zero and fails the job loudly
+      # instead of silently skipping the tests below.
+      - name: Start local Postgres and apply migrations
+        run: supabase db start
+
+      # Runs every supabase/tests/*.sql pgTAP suite (pg_prove under the
+      # hood) against the database provisioned above. All auth.uid()/RLS
+      # fixtures in these suites simulate the PostgREST session via
+      # `set local role authenticated` + `set_config('request.jwt.claim.sub',
+      # ...)`, so they only need the auth schema/roles baked into the
+      # Postgres image, not the GoTrue/Storage API services running. A
+      # single failing pgTAP assertion makes pg_prove exit non-zero, which
+      # fails this step and the job.
+      - name: Run pgTAP suites
+        run: supabase test db

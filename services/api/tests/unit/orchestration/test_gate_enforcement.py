@@ -4,13 +4,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from test_advance import CASE_ID, FakeOrchestrationRepository, RecordingQueue
+from test_advance import CASE_ID, FakeOrchestrationRepository
 
 from creditops.application.orchestration.advance import AdvanceCase
 from creditops.application.orchestration.graph import DependencyTemplate
 from creditops.application.orchestration.planner import OrchestrationPlanner
 from creditops.application.ports.model_gateway import InferenceResult, ReasonRequest
 from creditops.domain.orchestration import GateStatus, GateType, TaskType
+from creditops.domain.tasks import TaskEnvelopeV1
 
 TEMPLATE = DependencyTemplate.canonical()
 NOW = datetime(2026, 7, 18, 6, 30, tzinfo=UTC)
@@ -56,13 +57,11 @@ class HostilePlannerGateway:
 @pytest.mark.asyncio
 async def test_an_open_gate_holds_even_against_a_planner_proposal() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
     # The makers are legitimately ready behind the satisfied intake gate, but G2
     # (gap approval) is OPEN: risk review and operations must stay unscheduled
     # no matter what the planner proposes.
     use_case = AdvanceCase(
         repository,
-        queue,
         OrchestrationPlanner(TEMPLATE, gateway=HostilePlannerGateway()),
         template=TEMPLATE,
         clock=lambda: NOW,
@@ -73,7 +72,10 @@ async def test_an_open_gate_holds_even_against_a_planner_proposal() -> None:
     assert result.proposal_status == "REJECTED"
     assert result.plan.source == "DEFAULT"
     # Only the deterministic default plan ran: the two ready makers.
-    assert {envelope.task_type for envelope in queue.sent} == {
+    outboxed = [
+        TaskEnvelopeV1.model_validate(dict(event.payload)) for event in repository.outbox
+    ]
+    assert {envelope.task_type for envelope in outboxed} == {
         TaskType.CREDIT_UNDERWRITING,
         TaskType.LEGAL_COMPLIANCE_COLLATERAL,
     }
@@ -92,10 +94,8 @@ async def test_an_open_gate_holds_even_against_a_planner_proposal() -> None:
 @pytest.mark.asyncio
 async def test_the_engine_never_satisfies_human_only_gates() -> None:
     repository = FakeOrchestrationRepository()
-    queue = RecordingQueue()
     use_case = AdvanceCase(
         repository,
-        queue,
         OrchestrationPlanner(TEMPLATE, gateway=None),
         template=TEMPLATE,
         clock=lambda: NOW,

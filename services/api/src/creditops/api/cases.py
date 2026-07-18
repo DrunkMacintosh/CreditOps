@@ -43,6 +43,15 @@ class CaseCapabilities(BaseModel):
     can_complete_intake: bool = Field(serialization_alias="canCompleteIntake")
 
 
+class CaseCapabilitiesResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    case_roles: list[str] = Field(serialization_alias="caseRoles")
+    can_upload: bool = Field(serialization_alias="canUpload")
+    can_confirm: bool = Field(serialization_alias="canConfirm")
+    can_complete_intake: bool = Field(serialization_alias="canCompleteIntake")
+
+
 class CaseResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -69,7 +78,28 @@ class CaseListResponse(BaseModel):
     capabilities: CaseCollectionCapabilities
 
 
-def _case_response(record: CaseRecord) -> CaseResponse:
+def _derive_capabilities(
+    case_roles: frozenset[str],
+    jwt_roles: frozenset[str],
+) -> CaseCapabilities:
+    """Derive intake mutation capabilities from server-side case roles.
+
+    Fail closed: a capability is granted only when the actor holds the
+    ``INTAKE_OFFICER`` role BOTH as a server-side case assignment AND as a JWT
+    claim (their intersection). No assignment role means no mutation capability;
+    assignment/delegation is an audited server command, never inferred from the
+    client. Non-intake case roles carry no intake mutation capability here.
+    """
+
+    can_mutate_intake = INTAKE_OFFICER_ROLE in (case_roles & jwt_roles)
+    return CaseCapabilities(
+        can_upload=can_mutate_intake,
+        can_confirm=can_mutate_intake,
+        can_complete_intake=can_mutate_intake,
+    )
+
+
+def _case_response(record: CaseRecord, capabilities: CaseCapabilities) -> CaseResponse:
     return CaseResponse(
         id=record.id,
         version=record.version,
@@ -77,11 +107,7 @@ def _case_response(record: CaseRecord) -> CaseResponse:
         requested_amount=record.requested_amount,
         purpose_vi=record.purpose_vi,
         created_at=record.created_at,
-        capabilities=CaseCapabilities(
-            can_upload=True,
-            can_confirm=True,
-            can_complete_intake=True,
-        ),
+        capabilities=capabilities,
     )
 
 
@@ -134,7 +160,11 @@ async def create_case(
             message_vi="Bạn không có vai trò tiếp nhận được yêu cầu.",
         ) from exc
     response.headers["Location"] = f"/api/v1/cases/{record.id}"
-    return _case_response(record)
+    # Create self-assigns the actor as INTAKE_OFFICER on the new case, so the
+    # server-derived case role is exactly {INTAKE_OFFICER}; capabilities still
+    # fail closed through the JWT intersection performed by ``_derive_capabilities``.
+    capabilities = _derive_capabilities(frozenset({INTAKE_OFFICER_ROLE}), actor.roles)
+    return _case_response(record, capabilities)
 
 
 @router.get("", response_model=CaseListResponse)
@@ -158,8 +188,18 @@ async def list_cases(
             cursor=cursor,
             limit=limit,
         )
+        items = [
+            _case_response(
+                record,
+                _derive_capabilities(
+                    await uow.cases.list_assignment_roles(record.id, actor.actor_id),
+                    actor.roles,
+                ),
+            )
+            for record in records
+        ]
     return CaseListResponse(
-        items=[_case_response(record) for record in records],
+        items=items,
         next_cursor=next_cursor,
         capabilities=CaseCollectionCapabilities(can_create_case=True),
     )
@@ -174,6 +214,9 @@ async def get_case(
     _require_intake_role(actor)
     async with uow_factory(actor) as uow:
         record = await uow.cases.get_assigned(case_id, actor.actor_id)
+        case_roles: frozenset[str] = frozenset()
+        if record is not None:
+            case_roles = await uow.cases.list_assignment_roles(case_id, actor.actor_id)
     if record is None:
         raise ApiException(
             status_code=404,
@@ -181,4 +224,34 @@ async def get_case(
             message_vi="Không tìm thấy hồ sơ hoặc bạn không có quyền truy cập.",
             retryable=False,
         )
-    return _case_response(record)
+    return _case_response(record, _derive_capabilities(case_roles, actor.roles))
+
+
+@router.get("/{case_id}/capabilities", response_model=CaseCapabilitiesResponse)
+async def get_case_capabilities(
+    case_id: UUID,
+    actor: Actor,
+    uow_factory: UowFactory,
+) -> CaseCapabilitiesResponse:
+    # No JWT-role gate here: any non-revoked assignee (intake or otherwise) may read
+    # their own capability map. Unassigned actors get the same 404 as a missing case
+    # so assignment membership is not disclosed (fail-closed 404-indistinguishability).
+    async with uow_factory(actor) as uow:
+        record = await uow.cases.get_assigned(case_id, actor.actor_id)
+        case_roles: frozenset[str] = frozenset()
+        if record is not None:
+            case_roles = await uow.cases.list_assignment_roles(case_id, actor.actor_id)
+    if record is None:
+        raise ApiException(
+            status_code=404,
+            code="CASE_NOT_ACCESSIBLE",
+            message_vi="Không tìm thấy hồ sơ hoặc bạn không có quyền truy cập.",
+            retryable=False,
+        )
+    capabilities = _derive_capabilities(case_roles, actor.roles)
+    return CaseCapabilitiesResponse(
+        case_roles=sorted(case_roles),
+        can_upload=capabilities.can_upload,
+        can_confirm=capabilities.can_confirm,
+        can_complete_intake=capabilities.can_complete_intake,
+    )

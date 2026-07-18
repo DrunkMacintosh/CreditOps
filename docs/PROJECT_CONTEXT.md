@@ -71,7 +71,7 @@ The official checklist, document validity rules, and stage-specific requirements
 ## Current status
 
 - **CONFIRMED:** The business concept and broad corporate-credit workflow have been defined.
-- **CONFIRMED:** Six conceptual agent roles and Evidence Gap Resolution have been defined.
+- **CONFIRMED:** Eight logical agent roles and Evidence Gap Resolution (a shared workflow capability, not a ninth agent) are defined by the approved master design ([full credit-lifecycle design](superpowers/specs/2026-07-18-full-credit-lifecycle-agent-workflow-design.md)): Case Orchestrator, Relationship & Intake, Credit Underwriting, Legal/Compliance & Collateral, Independent Risk Review, Credit Operations, Post-Credit Monitoring, and Collections & Recovery. The earlier six-role description is retained in [Agent Architecture](AGENT_ARCHITECTURE.md) as the implemented pre-approval subset.
 - **CONFIRMED:** The target managed architecture is Vercel for the frontend, Cloud Run for the FastAPI API and asynchronous `creditops-worker` Job, Supabase for durable state, queues, object storage, and retrieval metadata, and FPT AI Factory for managed inference only.
 - **CONFIRMED:** The earlier hourly FPT H100 VM and local vLLM direction is superseded and retained only as decision history.
 - **CONFIRMED:** A local walking-skeleton prototype is implemented: Vietnamese case/intake flows, assigned-officer access, private Supabase upload intents and completion verification, durable identifier-only queue contracts, worker-slot leases with checkpointed retry/redelivery semantics, Cloud Run dispatch contracts, safe document parsing, and an FPT capability gateway.

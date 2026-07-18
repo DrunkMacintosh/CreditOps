@@ -15,6 +15,7 @@ from creditops.application.orchestration.processors import (
     ProcessorRegistry,
 )
 from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
+from creditops.application.use_cases.dispatch_outbox import DispatchOutbox
 from creditops.application.use_cases.run_worker_once import (
     StageResult,
     WorkerOutcome,
@@ -71,11 +72,11 @@ def build_processor(
     return OrchestratorPlanProcessor(
         AdvanceCase(
             repository,
-            queue,
             OrchestrationPlanner(TEMPLATE, gateway=None),
             template=TEMPLATE,
             clock=lambda: NOW,
-        )
+        ),
+        dispatch=DispatchOutbox(repository, queue),
     )
 
 

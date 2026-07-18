@@ -212,6 +212,15 @@ class Challenge(BaseModel):
     severity: ChallengeSeverity
     confidence: ConfidenceLevel
     raised_by: RaisedBy = RaisedBy.LLM
+    #: Whether the concern behind this challenge was ALSO independently
+    #: surfaced by the blind Pass A pre-analysis (before the checker saw any
+    #: maker conclusion).  Additive, defaults ``False`` so a challenge that did
+    #: not originate in the blind pass -- every deterministic challenge, and
+    #: any Pass B challenge with no blind overlap -- reads as not-blind.  This
+    #: is a provenance flag only; it can never clear, resolve, or decide
+    #: anything (it is not a decision field, so the import-time guard admits
+    #: it).
+    raised_blind: bool = False
 
 
 class OmittedRiskItem(BaseModel):

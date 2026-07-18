@@ -316,9 +316,10 @@ def test_participant_reads_latest_package_with_draft_actions(
         assert action["authorized"] is False
         assert action["authorizations"] == []
     assert body["g4GateStatus"] == "OPEN"
-    # G2: one drafted request, unapproved.
+    # G2 is no longer owned by the credit-ops package: the read model reports
+    # the sentinel pointing at the pre-Risk gap-request workflow.
     assert body["documentRequests"][0]["approvalStatus"] == "PENDING_APPROVAL"
-    assert body["g2GateStatus"] == "OPEN"
+    assert body["g2GateStatus"] == "SEE_GAP_REQUEST_WORKFLOW"
     # No decision-capable field leaks through the read model.
     lowered = {key.lower() for key in body}
     assert not lowered & {"decision", "approved", "score", "waiver", "executed"}
@@ -480,9 +481,12 @@ def test_unassigned_ops_officer_cannot_probe_actions(
 # -- POST approve document request --------------------------------------------
 
 
-def test_ops_officer_approval_flips_only_the_derived_view_and_satisfies_g2(
+def test_ops_officer_approval_flips_only_the_derived_view_and_never_touches_g2(
     signing_key: rsa.RSAPrivateKey,
 ) -> None:
+    # Document-request approval is now a POST-Risk operational artifact: it
+    # records + audits + flips the derived view, but drives NO gate.  G2 is
+    # owned by the pre-Risk gap-request workflow, so no ensure_gate call fires.
     repository = FakeCreditOpsRepository()
     orchestration = FakeOrchestrationRepository()
     client = _build_client(
@@ -503,15 +507,11 @@ def test_ops_officer_approval_flips_only_the_derived_view_and_satisfies_g2(
         e.event_type == "CREDIT_OPS_DOCUMENT_REQUEST_APPROVED"
         for e in repository.audit_events
     )
-    # All drafted requests now approved: G2 derives SATISFIED via the
-    # human-triggered path.
-    assert len(orchestration.ensure_gate_calls) == 1
-    call = orchestration.ensure_gate_calls[0]
-    assert call["gate_type"] == GateType.G2_GAP_REQUEST_APPROVAL
-    assert call["status"] == GateStatus.SATISFIED
+    # Approval no longer satisfies any gate -- the old G2 path is gone.
+    assert orchestration.ensure_gate_calls == []
 
-    # The derived view flips to APPROVED; the stored package row (the fake's
-    # payload) still says PENDING_APPROVAL -- approval never mutates it.
+    # The derived view still flips to APPROVED; the stored package row (the
+    # fake's payload) still says PENDING_APPROVAL -- approval never mutates it.
     status = client.get(
         f"/api/v1/cases/{CASE_ID}/credit-ops",
         headers={"Authorization": f"Bearer {token(signing_key)}"},
@@ -520,7 +520,7 @@ def test_ops_officer_approval_flips_only_the_derived_view_and_satisfies_g2(
     assert (
         _package_payload()["document_requests"][0]["approval_status"] == "PENDING_APPROVAL"
     )
-    assert status["g2GateStatus"] == "SATISFIED"
+    assert status["g2GateStatus"] == "SEE_GAP_REQUEST_WORKFLOW"
 
 
 def test_approve_endpoint_rejects_non_ops_officer_actors(

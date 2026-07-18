@@ -55,6 +55,59 @@ class CheckerEvidenceView:
 
 
 @dataclass(frozen=True, slots=True)
+class PreAnalysisEvidenceView:
+    """BLIND evidence view for Pass A of the two-pass Independent Risk Review.
+
+    Structurally identical fields to ``CheckerEvidenceView`` (Confirmed Facts
+    only, versioned) but a DISTINCT type carrying no maker/legal attribute of
+    any kind: the blind pass forms an independent pre-analysis from evidence,
+    calculations and gaps WITHOUT ever seeing a maker conclusion, so the type
+    it reasons over is deliberately incapable of holding one.  A checker
+    execution that tried to feed maker output into Pass A would have to hold it
+    in a field this dataclass does not define.
+    """
+
+    case_id: UUID
+    case_version: int
+    built_at: datetime
+    confirmed_facts: tuple[EvidenceFact, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PreAnalysisRecord:
+    """One blind Pass A artifact to persist: identity plus its typed analysis.
+
+    ``analysis`` is the STRUCTURED, evidence-cited pre-analysis payload (typed
+    independent risks/observations) -- never free-form reasoning.  The port
+    takes an opaque JSON object here so the durable store never depends on the
+    application-layer artifact type.
+    """
+
+    id: UUID
+    case_id: UUID
+    case_version: int
+    task_id: UUID
+    execution_id: UUID
+    prompt_version: str
+    schema_version: str
+    analysis: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedPreAnalysis:
+    """Durable identity of one blind Pass A pre-analysis plus its payload.
+
+    ``analysis`` is carried back so a Pass B that resumes after a Pass A crash
+    (or a redelivery whose checkpoint was lost) can inject the already-durable
+    blind view without rerunning the model.
+    """
+
+    pre_analysis_id: UUID
+    analysis: Mapping[str, object]
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class MakerOutputsView:
     """Both maker outputs the checker independently inspects, READ-ONLY.
 
@@ -154,6 +207,10 @@ class RiskReviewRepository(Protocol):
 
     async def load_evidence_view(self, case_id: UUID) -> CheckerEvidenceView | None: ...
 
+    async def load_blind_evidence_view(
+        self, case_id: UUID
+    ) -> PreAnalysisEvidenceView | None: ...
+
     async def load_maker_outputs(
         self, case_id: UUID, case_version: int
     ) -> MakerOutputsView: ...
@@ -177,6 +234,18 @@ class RiskReviewRepository(Protocol):
         case_version: int,
         task_id: UUID,
     ) -> PersistedCheckerOutput | None: ...
+
+    async def find_pre_analysis(
+        self,
+        *,
+        case_id: UUID,
+        case_version: int,
+        task_id: UUID,
+    ) -> PersistedPreAnalysis | None: ...
+
+    async def persist_pre_analysis(
+        self, *, record: PreAnalysisRecord
+    ) -> PersistedPreAnalysis: ...
 
     async def persist_assessment(
         self,

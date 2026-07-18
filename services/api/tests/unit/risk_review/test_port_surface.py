@@ -62,9 +62,13 @@ def test_load_maker_outputs_is_the_only_maker_state_accessor() -> None:
 
 def test_port_writes_are_scoped_to_risk_review_and_audit_only() -> None:
     # Every write-shaped method name must be about risk-review state
-    # (assessment/challenge/disposition) or the shared append-only audit
-    # trail -- never about maker state, gates, gaps, or conflicts.
-    allowed_write_subjects = ("assessment", "disposition", "audit")
+    # (assessment/challenge/disposition/blind pre-analysis) or the shared
+    # append-only audit trail -- never about maker state, gates, gaps, or
+    # conflicts.  ``analysis`` covers ``persist_pre_analysis``, the Pass A blind
+    # store, which is checker state (never maker state); maker-output
+    # immutability stays enforced by test_port_exposes_no_write_method_for_
+    # maker_tables above.
+    allowed_write_subjects = ("assessment", "disposition", "audit", "analysis")
     for name in _protocol_method_names():
         lowered = name.lower()
         if lowered.startswith(_WRITE_VERB_PREFIXES):
