@@ -285,7 +285,7 @@ async def test_repeat_confirmation_conflict_derives_and_writes_no_edges() -> Non
 
     result = await _record(connection, _accepted())
 
-    assert getattr(result, "created") is False
+    assert result.created is False
     sql = _sql(connection)
     assert "insert into public.confirmed_facts" not in sql
     assert "insert into public.evidence_edges" not in sql
