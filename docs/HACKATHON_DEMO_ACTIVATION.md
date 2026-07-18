@@ -52,14 +52,66 @@ GitHub Actions. These need an operator with the cloud credentials:
      `SUPABASE_SERVICE_ROLE_KEY`) stay as-is. With demo enabled, external
      `OIDC_*` is not required. Do **not** also configure external `OIDC_*` at the
      same time (the OIDC verifier would reject demo tokens — a known footgun).
-3. **Activate real FPT** (no fake bypass): add `FPT_REASONING_ENDPOINT_URL` +
-   `FPT_REASONING_ENDPOINT_ID` as GitHub Actions secrets/vars, run the
-   `fpt-benchmark` workflow, and — only if it PASSES the committed Vietnamese
-   holdout — commit an `FPTBenchmarkRecord` to `benchmark_records.py` + a
-   `DECISION_LOG` entry. If the run fails on the endpoint contract shape
-   (`FPTClient` assumes `{model,input}→{output}`; real FPT AI Factory may be
-   OpenAI-compatible), `client.py` needs a small reviewed adaptation the first
-   run reveals.
+3. **Activate real FPT** (no fake bypass). FPT AI Factory's managed endpoints
+   are **OpenAI-compatible**: the reasoning endpoint is a
+   `POST <base>/v1/chat/completions` URL and the embedding endpoint is a
+   `POST <base>/v1/embeddings` URL — set `FPT_REASONING_ENDPOINT_URL` /
+   `FPT_EMBEDDING_ENDPOINT_URL` to those full URLs (including the `/v1/...`
+   path), not just the provider's base host. Only `FPT_API_KEY` is a secret;
+   the endpoint URL/ID are non-secret GitHub Actions **variables** — both live
+   on the protected `staging` GitHub environment read by
+   `.github/workflows/fpt-benchmark.yml`:
+
+   ```bash
+   gh secret set   FPT_API_KEY               --env staging
+   gh variable set FPT_REASONING_ENDPOINT_URL --env staging --body "https://<fpt-base>/v1/chat/completions"
+   gh variable set FPT_REASONING_ENDPOINT_ID  --env staging --body "<reasoning-endpoint-id>"
+   gh variable set FPT_EMBEDDING_ENDPOINT_URL --env staging --body "https://<fpt-base>/v1/embeddings"
+   gh variable set FPT_EMBEDDING_ENDPOINT_ID  --env staging --body "<embedding-endpoint-id>"
+   ```
+
+   Then the **run -> evidence -> commit-record -> activate** flow (full detail
+   in [`docs/benchmarks/README.md`](docs/benchmarks/README.md)):
+
+   1. **Run** — Actions -> `FPT benchmark` -> Run workflow, pick `capability`
+      (`reasoning` / `embedding` / `all`), approve the `staging` environment
+      if prompted. This calls `scripts/run_fpt_benchmark.py` via
+      `FPTCatalog.for_benchmark_evaluation` — the only path allowed to reach a
+      live endpoint before a pass record exists.
+   2. **Evidence** — on `PASS` the job writes
+      `docs/benchmarks/<capability>-<model>-evidence.md` (no secrets); download
+      the `fpt-benchmark-evidence-<capability>-<run id>` artifact to get it.
+      On `FAIL`/`SKIP`, no evidence indicates a pass and no record follows —
+      do not hand-write one.
+   3. **Commit-record** (mechanical, reviewed) — commit the downloaded
+      evidence file into `docs/benchmarks/`, then run:
+
+      ```bash
+      uv run python3 scripts/build_fpt_benchmark_record.py \
+        docs/benchmarks/<capability>-<model>-evidence.md \
+        --capability <capability> --model-id <model-id> --endpoint-id <endpoint-id> \
+        --recorded-on <YYYY-MM-DD>
+      ```
+
+      It re-derives the exact `FPTBenchmarkRecord(...)` literal from the
+      committed evidence (`route_version`/`prompt_version`/`schema_version`
+      always come from `catalog.py`, never the file) and **refuses** (non-zero
+      exit, nothing on stdout) unless that evidence's own `Verdict:` line reads
+      `PASS` and its identity matches what you asked for. Paste its stdout into
+      `FPT_BENCHMARK_RECORDS` in
+      `services/api/src/creditops/infrastructure/fpt/benchmark_records.py`,
+      append a `DECISION_LOG.md` row, and land it as its own reviewed PR.
+   4. **Activate** — once that PR merges, `FPTCatalog.from_configuration` (the
+      path the deployed API/worker actually use) activates the capability; no
+      other step is needed.
+
+   If a run instead fails on the endpoint *contract shape* — `FPTClient`
+   currently sends an internal `{model, input} -> {output}` JSON body, not the
+   OpenAI `chat/completions`/`embeddings` request/response shape — that is
+   expected until `client.py` is adapted to speak the OpenAI-compatible
+   protocol in its own reviewed change; capture the raw response in the job
+   log rather than guess-patching (see the "Known open question" section of
+   `docs/benchmarks/README.md`).
 4. **Flip `WORKER_RUNTIME_READY=true`** only after the worker path is
    live-verified.
 5. **Merge this PR to `main`** → CI → `Deploy synthetic development` runs
