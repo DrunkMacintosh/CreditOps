@@ -161,6 +161,54 @@ jobs:
           --no-allow-unauthenticated
           --quiet
 
+      # Runtime coordinates for the synthetic demonstration, derived from
+      # repository vars/secrets so populating Google Secret Manager is not a
+      # deploy prerequisite.  Secret VALUES land in the service's env
+      # configuration (visible to GCP project viewers) — an accepted
+      # trade-off for the synthetic-only demo; migrate to Secret Manager /
+      # api_secret_refs beyond it (docs/DEPLOYMENT_RUNBOOK.md).  Optional
+      # pairs (OIDC_*, FPT endpoints, service-role key) are skipped while
+      # unset and the application keeps failing closed without them.
+      - name: Apply runtime environment to API service
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FPT_API_KEY: ${{ secrets.FPT_API_KEY }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
+          OIDC_AUDIENCE: ${{ vars.OIDC_AUDIENCE }}
+          OIDC_JWKS_URL: ${{ vars.OIDC_JWKS_URL }}
+          FPT_REASONING_ENDPOINT_URL: ${{ vars.FPT_REASONING_ENDPOINT_URL }}
+          FPT_REASONING_ENDPOINT_ID: ${{ vars.FPT_REASONING_ENDPOINT_ID }}
+          FPT_VISION_ENDPOINT_URL: ${{ vars.FPT_VISION_ENDPOINT_URL }}
+          FPT_VISION_ENDPOINT_ID: ${{ vars.FPT_VISION_ENDPOINT_ID }}
+          FPT_EMBEDDING_ENDPOINT_URL: ${{ vars.FPT_EMBEDDING_ENDPOINT_URL }}
+          FPT_EMBEDDING_ENDPOINT_ID: ${{ vars.FPT_EMBEDDING_ENDPOINT_ID }}
+        run: |
+          set -euo pipefail
+          pw_enc="$(python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')"
+          pairs="DATABASE_URL=postgresql://postgres:${pw_enc}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres?sslmode=require"
+          pairs="${pairs}|SUPABASE_URL=https://${SUPABASE_PROJECT_REF}.supabase.co"
+          pairs="${pairs}|GCP_PROJECT_ID=${GCP_PROJECT_ID}"
+          pairs="${pairs}|GCP_LOCATION=${GCP_REGION}"
+          pairs="${pairs}|GCP_WORKER_JOB_NAME=${CLOUD_RUN_WORKER_JOB}"
+          pairs="${pairs}|APP_ENV=development"
+          for key in SUPABASE_SERVICE_ROLE_KEY FPT_API_KEY OIDC_ISSUER \
+            OIDC_AUDIENCE OIDC_JWKS_URL FPT_REASONING_ENDPOINT_URL \
+            FPT_REASONING_ENDPOINT_ID FPT_VISION_ENDPOINT_URL \
+            FPT_VISION_ENDPOINT_ID FPT_EMBEDDING_ENDPOINT_URL \
+            FPT_EMBEDDING_ENDPOINT_ID; do
+            value="${!key:-}"
+            if [ -n "$value" ]; then
+              pairs="${pairs}|${key}=${value}"
+            fi
+          done
+          gcloud run services update "$CLOUD_RUN_API_SERVICE" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --update-env-vars="^|^${pairs}" \
+            --quiet
+
       # Each worker Job drains exactly ONE queue and refuses to run (exit 78)
       # unless WORKER_MODE is set to "document" or "agent" — see
       # services/api/src/creditops/worker/main.py (build_runtime returns None,
