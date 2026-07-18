@@ -19,6 +19,8 @@ from uuid import NAMESPACE_OID, UUID, uuid4, uuid5
 
 from pydantic import ValidationError
 
+from creditops.application.governance import governance_for, manifest_from_governance
+from creditops.application.ports.governance import GovernanceRepository
 from creditops.application.ports.model_gateway import (
     InferenceError,
     InferenceUnavailableError,
@@ -26,6 +28,7 @@ from creditops.application.ports.model_gateway import (
 from creditops.application.ports.orchestration import OrchestrationAuditEvent
 from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
 from creditops.application.ports.underwriting import (
+    EvidenceView,
     PersistedMakerOutput,
     UnderwritingRepository,
 )
@@ -41,6 +44,8 @@ from creditops.application.use_cases.run_worker_once import (
     StageResult,
     WorkerOutcome,
 )
+from creditops.domain.goal_contracts import UNIVERSAL_PROHIBITED_ACTIONS
+from creditops.domain.orchestration import TaskType
 from creditops.domain.underwriting import (
     UNDERWRITING_AGENT_ROLE,
     UnderwritingAssessment,
@@ -51,6 +56,11 @@ CHECKPOINT_CALCULATORS = "CALCULATORS_COMPUTED"
 CHECKPOINT_INFERENCE = "INFERENCE_VALIDATED"
 CHECKPOINT_PERSISTED = "ASSESSMENT_PERSISTED"
 
+#: The service identity under which the worker acts when it builds a context
+#: manifest.  The worker runs as a service-role process, not an authenticated
+#: human; the agent's case role is carried separately in the snapshot.
+_SERVICE_IDENTITY = "service:agent-worker"
+
 
 class CreditUnderwritingProcessor:
     """Run one resumable, idempotent maker execution for a claimed task."""
@@ -60,11 +70,22 @@ class CreditUnderwritingProcessor:
         repository: UnderwritingRepository,
         inference: RunUnderwritingInference | None,
         *,
+        governance: GovernanceRepository | None = None,
         clock: Callable[[], datetime] | None = None,
         execution_id_factory: Callable[[], UUID] | None = None,
     ) -> None:
         self._repository = repository
         self._inference = inference
+        self._governance = governance
+        # The committed goal contract bounding this task type.  Fetched
+        # unconditionally so the universal human-only bans are enforced at
+        # construction whether or not manifest persistence is wired; the domain
+        # model already guarantees the superset, this asserts the wired
+        # contract IS the registry's.
+        self._governance_profile = governance_for(TaskType.CREDIT_UNDERWRITING)
+        assert UNIVERSAL_PROHIBITED_ACTIONS.issubset(
+            self._governance_profile.goal_contract.prohibited_actions
+        ), "underwriting goal contract must restate every universal prohibited action"
         self._clock = clock or (lambda: datetime.now(UTC))
         self._execution_id_factory = execution_id_factory or uuid4
 
@@ -153,6 +174,13 @@ class CreditUnderwritingProcessor:
             },
         )
 
+        # Governance: snapshot exactly what this maker call is authorized to see
+        # BEFORE the inference runs.  Reached only on the fresh pre-inference
+        # path; a resume from INFERENCE/PERSISTED short-circuits above, and the
+        # persist is idempotent per (task, contextHash) so a crash-and-redeliver
+        # in this window never writes a second manifest.
+        await self._persist_context_manifest(task, view)
+
         run = MakerRunContext(
             task_id=task.id,
             execution_id=self._execution_id_factory(),
@@ -212,6 +240,37 @@ class CreditUnderwritingProcessor:
             },
         )
         return StageResult()
+
+    async def _persist_context_manifest(
+        self, task: TaskRecord, view: EvidenceView
+    ) -> None:
+        """Build and persist this maker call's context manifest (no-op without
+        a wired governance repository — today's default behaviour)."""
+
+        if self._governance is None:
+            return
+        manifest = manifest_from_governance(
+            self._governance_profile,
+            case_id=task.case_id,
+            case_version=task.case_version,
+            task_id=task.id,
+            actor_or_service_identity=_SERVICE_IDENTITY,
+            case_roles=(UNDERWRITING_AGENT_ROLE,),
+            authoritative_fact_refs=tuple(
+                fact.confirmed_fact_id for fact in view.confirmed_facts
+            ),
+        )
+        persisted = await self._governance.persist_manifest(manifest)
+        await self._audit(
+            task,
+            "UNDERWRITING_CONTEXT_MANIFEST_PERSISTED",
+            {
+                "contextManifestId": str(persisted.manifest_id),
+                "contextHash": persisted.context_hash,
+                "goalContractKey": self._governance_profile.contract_key,
+                "goalContractVersion": self._governance_profile.goal_contract.version,
+            },
+        )
 
     @staticmethod
     def _handoff_id_for(assessment: UnderwritingAssessment) -> UUID:

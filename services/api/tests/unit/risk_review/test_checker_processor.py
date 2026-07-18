@@ -16,10 +16,15 @@ from uuid import UUID, uuid4
 import pytest
 from jsonschema import Draft202012Validator
 
+from creditops.application.governance import goal_contract_for, governance_by_key
+from creditops.application.governance.contracts import (
+    RISK_REVIEW_PRE_ANALYSIS_CONTRACT_KEY,
+)
 from creditops.application.orchestration.processors import (
     ManualReviewProcessor,
     ProcessorRegistry,
 )
+from creditops.application.ports.governance import PersistedManifest
 from creditops.application.ports.model_gateway import (
     InferenceResult,
     InferenceUnavailableError,
@@ -67,6 +72,7 @@ from creditops.application.use_cases.run_worker_once import (
     WorkerOutcome,
 )
 from creditops.domain.enums import TaskStatus
+from creditops.domain.goal_contracts import ContextManifest, compute_context_hash
 from creditops.domain.legal import AssessmentSection as LegalAssessmentSection
 from creditops.domain.legal import (
     CollateralReviewSection,
@@ -78,7 +84,7 @@ from creditops.domain.legal import (
 from creditops.domain.legal import ConfirmedFactCitation as LegalConfirmedFactCitation
 from creditops.domain.legal import Finding as LegalFinding
 from creditops.domain.orchestration import TaskType
-from creditops.domain.risk_review import RiskReviewAssessment
+from creditops.domain.risk_review import GapBlockingLevel, RiskReviewAssessment
 from creditops.domain.tasks import TaskEnvelopeV1
 from creditops.domain.underwriting import (
     AssessmentProvenance,
@@ -515,10 +521,35 @@ class CheckpointRecorder:
         return [checkpoint.checkpoint_type for checkpoint in self.saved]
 
 
+class FakeGovernanceRepository:
+    """Dedupes context manifests per (task, contextHash), like the durable
+    partial unique index; records every persist call.  The two-pass risk review
+    persists TWO manifests per task (blind Pass A + checker Pass B), whose
+    content hashes differ, so both are stored."""
+
+    def __init__(self) -> None:
+        self.persist_calls: list[ContextManifest] = []
+        self.manifests: dict[tuple[UUID | None, str], UUID] = {}
+
+    async def persist_manifest(self, manifest: ContextManifest) -> PersistedManifest:
+        self.persist_calls.append(manifest)
+        context_hash = compute_context_hash(manifest)
+        key = (manifest.task_id, context_hash)
+        existing = self.manifests.get(key)
+        if existing is not None:
+            return PersistedManifest(existing, context_hash, created=False)
+        self.manifests[key] = manifest.id
+        return PersistedManifest(manifest.id, context_hash, created=True)
+
+    async def ensure_goal_contract_rows(self, contracts: object) -> None:
+        del contracts
+
+
 def build_processor(
     repository: FakeRiskReviewRepository,
     gateway: FakeGateway | None,
     *,
+    governance: FakeGovernanceRepository | None = None,
     execution_id_factory: Callable[[], UUID] | None = None,
 ) -> IndependentRiskReviewProcessor:
     inference = (
@@ -535,6 +566,7 @@ def build_processor(
         repository,
         inference,
         pre_analysis_inference,
+        governance=governance,
         clock=lambda: NOW,
         execution_id_factory=execution_id_factory,
     )
@@ -864,6 +896,108 @@ async def test_redelivery_without_checkpoint_finds_durable_output_idempotently()
     assert recorder.types() == [CHECKPOINT_PERSISTED]
     assert len(repository.assessments) == 1
     assert len(repository.handoffs) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_context_manifests_persisted_blind_and_checker() -> None:
+    # The two-pass review makes TWO bounded model calls, so it persists TWO
+    # distinct manifests under TWO distinct committed contracts.  The blind
+    # Pass A manifest is structurally incapable of naming a maker artifact.
+    underwriting = build_underwriting()
+    legal = build_legal()
+    gap = OpenGapRecord(
+        gap_id=uuid4(),
+        missing_information_vi="Ho so bo sung (mo phong).",
+        blocking_level=GapBlockingLevel.CONDITIONAL,
+        status="FORMAL",
+    )
+    repository = FakeRiskReviewRepository(
+        view=checker_view(),
+        underwriting=underwriting,
+        underwriting_execution_id=underwriting.provenance.execution_id,
+        legal=legal,
+        legal_execution_id=legal.provenance.execution_id,
+        open_gaps=(gap,),
+    )
+    governance = FakeGovernanceRepository()
+    gateway = FakeGateway(dispatched(valid_payload(underwriting, legal)))
+    processor = build_processor(repository, gateway, governance=governance)
+
+    result = await processor.process(checker_task(), None, CheckpointRecorder().save)
+
+    assert result == StageResult()
+    assert len(governance.persist_calls) == 2
+    assert len(governance.manifests) == 2
+    blind_contract = governance_by_key(RISK_REVIEW_PRE_ANALYSIS_CONTRACT_KEY).goal_contract
+    checker_contract = goal_contract_for(TaskType.INDEPENDENT_RISK_REVIEW)
+    assert blind_contract.id != checker_contract.id
+    assert {m.goal_contract_id for m in governance.persist_calls} == {
+        blind_contract.id,
+        checker_contract.id,
+    }
+    blind = next(m for m in governance.persist_calls if m.goal_contract_id == blind_contract.id)
+    checker = next(
+        m for m in governance.persist_calls if m.goal_contract_id == checker_contract.id
+    )
+    # Blind Pass A: confirmed facts ONLY, never a maker artifact.
+    assert blind.upstream_artifact_refs == ()
+    assert set(blind.authoritative_fact_refs) == {
+        fact.confirmed_fact_id for fact in checker_view().confirmed_facts
+    }
+    # Checker Pass B: both maker handoffs and the open gap are in scope.
+    assert len(checker.upstream_artifact_refs) == 2
+    assert checker.open_gap_refs == (gap.gap_id,)
+    assert processor._governance_profile.goal_contract == checker_contract
+    assert processor._pre_analysis_governance.goal_contract == blind_contract
+    event_types = {e.event_type for e in repository.audit_events}
+    assert "RISK_REVIEW_PRE_ANALYSIS_CONTEXT_MANIFEST_PERSISTED" in event_types
+    assert "RISK_REVIEW_CONTEXT_MANIFEST_PERSISTED" in event_types
+
+
+@pytest.mark.asyncio
+async def test_blind_manifest_persisted_before_a_failing_pass_a() -> None:
+    # Pass A persists its manifest BEFORE the blind model call; an unavailable
+    # endpoint then fails closed, leaving exactly the blind manifest and no
+    # checker manifest (Pass B never ran).
+    underwriting = build_underwriting()
+    legal = build_legal()
+    repository = FakeRiskReviewRepository(
+        view=checker_view(),
+        underwriting=underwriting,
+        underwriting_execution_id=underwriting.provenance.execution_id,
+        legal=legal,
+        legal_execution_id=legal.provenance.execution_id,
+    )
+    governance = FakeGovernanceRepository()
+    processor = build_processor(repository, UnavailableGateway(), governance=governance)
+
+    result = await processor.process(checker_task(), None, CheckpointRecorder().save)
+
+    assert result.status is WorkerOutcome.FAILED_MANUAL_REVIEW
+    assert len(governance.manifests) == 1
+    blind_contract = governance_by_key(RISK_REVIEW_PRE_ANALYSIS_CONTRACT_KEY).goal_contract
+    assert governance.persist_calls[0].goal_contract_id == blind_contract.id
+    assert repository.assessments == {}
+
+
+@pytest.mark.asyncio
+async def test_no_manifest_persisted_without_a_gateway() -> None:
+    underwriting = build_underwriting()
+    legal = build_legal()
+    repository = FakeRiskReviewRepository(
+        view=checker_view(),
+        underwriting=underwriting,
+        underwriting_execution_id=underwriting.provenance.execution_id,
+        legal=legal,
+        legal_execution_id=legal.provenance.execution_id,
+    )
+    governance = FakeGovernanceRepository()
+    processor = build_processor(repository, None, governance=governance)
+
+    result = await processor.process(checker_task(), None, CheckpointRecorder().save)
+
+    assert result.status is WorkerOutcome.FAILED_MANUAL_REVIEW
+    assert governance.persist_calls == []
 
 
 def test_response_schema_is_closed_and_decision_free() -> None:

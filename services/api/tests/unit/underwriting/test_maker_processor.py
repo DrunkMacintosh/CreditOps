@@ -17,12 +17,14 @@ from uuid import UUID, uuid4
 import pytest
 from jsonschema import Draft202012Validator
 
+from creditops.application.governance import goal_contract_for
 from creditops.application.orchestration.graph import DependencyTemplate
 from creditops.application.orchestration.processors import (
     ManualReviewProcessor,
     ProcessorRegistry,
 )
 from creditops.application.orchestration.readiness import evaluate_readiness
+from creditops.application.ports.governance import PersistedManifest
 from creditops.application.ports.model_gateway import (
     InferenceResult,
     InferenceUnavailableError,
@@ -72,6 +74,7 @@ from creditops.application.use_cases.run_worker_once import (
     WorkerOutcome,
 )
 from creditops.domain.enums import TaskStatus
+from creditops.domain.goal_contracts import ContextManifest, compute_context_hash
 from creditops.domain.orchestration import (
     GateStatus,
     GateType,
@@ -353,6 +356,30 @@ class FakeUnderwritingRepository:
         self.audit_events.append(event)
 
 
+class FakeGovernanceRepository:
+    """Dedupes context manifests per (task, contextHash), like the durable
+    partial unique index; records every persist call so a test can distinguish
+    a fresh write from a deduplicated redelivery."""
+
+    def __init__(self) -> None:
+        self.persist_calls: list[ContextManifest] = []
+        self.manifests: dict[tuple[UUID | None, str], UUID] = {}
+        self.seeded: list[object] = []
+
+    async def persist_manifest(self, manifest: ContextManifest) -> PersistedManifest:
+        self.persist_calls.append(manifest)
+        context_hash = compute_context_hash(manifest)
+        key = (manifest.task_id, context_hash)
+        existing = self.manifests.get(key)
+        if existing is not None:
+            return PersistedManifest(existing, context_hash, created=False)
+        self.manifests[key] = manifest.id
+        return PersistedManifest(manifest.id, context_hash, created=True)
+
+    async def ensure_goal_contract_rows(self, contracts: object) -> None:
+        self.seeded.append(contracts)
+
+
 @dataclass
 class CheckpointRecorder:
     saved: list[TaskCheckpoint] = field(default_factory=list)
@@ -381,6 +408,7 @@ class CheckpointRecorder:
 def build_processor(
     repository: FakeUnderwritingRepository,
     gateway: FakeGateway | None,
+    governance: FakeGovernanceRepository | None = None,
 ) -> CreditUnderwritingProcessor:
     inference = (
         RunUnderwritingInference(gateway, prompt=UnderwritingPrompt("prompt-vi-test"))
@@ -390,6 +418,7 @@ def build_processor(
     return CreditUnderwritingProcessor(
         repository,
         inference,
+        governance=governance,
         clock=lambda: NOW,
     )
 
@@ -741,6 +770,127 @@ async def test_empty_evidence_view_fails_closed() -> None:
 
     assert result.status == WorkerOutcome.FAILED_MANUAL_REVIEW
     assert "no confirmed facts" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_context_manifest_persisted_before_inference_from_registry_contract() -> None:
+    view = make_view()
+    suite = build_calculator_suite(view)
+    governance = FakeGovernanceRepository()
+    repository = FakeUnderwritingRepository(view)
+    processor = build_processor(
+        repository, FakeGateway(lambda request: valid_payload(view, suite)), governance
+    )
+
+    result = await processor.process(maker_task(), None, CheckpointRecorder().save)
+
+    assert result == StageResult()
+    # Exactly one manifest, bound to the committed registry contract, snapshotting
+    # every confirmed fact the maker was authorized to see.
+    assert len(governance.persist_calls) == 1
+    assert len(governance.manifests) == 1
+    (manifest,) = governance.persist_calls
+    contract = goal_contract_for(TaskType.CREDIT_UNDERWRITING)
+    assert manifest.goal_contract_id == contract.id
+    assert manifest.goal_contract_version == contract.version
+    assert manifest.task_id == TASK_ID
+    assert set(manifest.authoritative_fact_refs) == {
+        fact.confirmed_fact_id for fact in view.confirmed_facts
+    }
+    # The wired contract IS the registry's (universal bans enforced there).
+    assert processor._governance_profile.goal_contract == contract
+    assert any(
+        event.event_type == "UNDERWRITING_CONTEXT_MANIFEST_PERSISTED"
+        for event in repository.audit_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_manifest_persisted_even_when_inference_unavailable() -> None:
+    # The manifest is snapshotted BEFORE the model runs: an endpoint that then
+    # fails still leaves exactly one persisted manifest behind.
+    view = make_view()
+    governance = FakeGovernanceRepository()
+    repository = FakeUnderwritingRepository(view)
+    processor = build_processor(repository, UnavailableGateway(), governance)
+
+    result = await processor.process(maker_task(), None, CheckpointRecorder().save)
+
+    assert result.status == WorkerOutcome.FAILED_MANUAL_REVIEW
+    assert len(governance.manifests) == 1
+    assert repository.assessments == {}
+
+
+@pytest.mark.asyncio
+async def test_no_manifest_persisted_without_a_gateway() -> None:
+    # Nothing ran, so nothing was authorized to be seen: no manifest.
+    view = make_view()
+    governance = FakeGovernanceRepository()
+    processor = build_processor(FakeUnderwritingRepository(view), None, governance)
+
+    result = await processor.process(maker_task(), None, CheckpointRecorder().save)
+
+    assert result.status == WorkerOutcome.FAILED_MANUAL_REVIEW
+    assert governance.persist_calls == []
+    assert governance.manifests == {}
+
+
+@pytest.mark.asyncio
+async def test_manifest_is_deduped_across_a_crash_before_inference_checkpoint() -> None:
+    # A crash after persisting the manifest but before INFERENCE_VALIDATED
+    # re-runs the pre-inference stage; the deterministic content hash makes the
+    # re-persist idempotent -- two persist calls, one durable row.
+    view = make_view()
+    suite = build_calculator_suite(view)
+    governance = FakeGovernanceRepository()
+    first = build_processor(
+        FakeUnderwritingRepository(view),
+        FakeGateway(lambda request: valid_payload(view, suite)),
+        governance,
+    )
+    await first.process(maker_task(), None, CheckpointRecorder().save)
+    # Fresh durable state (lost checkpoint + lost assessment), same evidence.
+    second = build_processor(
+        FakeUnderwritingRepository(view),
+        FakeGateway(lambda request: valid_payload(view, suite)),
+        governance,
+    )
+    await second.process(maker_task(), None, CheckpointRecorder().save)
+
+    assert len(governance.persist_calls) == 2
+    assert len(governance.manifests) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_from_inference_checkpoint_persists_no_new_manifest() -> None:
+    view = make_view()
+    suite = build_calculator_suite(view)
+    governance = FakeGovernanceRepository()
+    repository = FakeUnderwritingRepository(view)
+    processor = build_processor(
+        repository, FakeGateway(lambda request: valid_payload(view, suite)), governance
+    )
+    recorder = CheckpointRecorder()
+    await processor.process(maker_task(), None, recorder.save)
+    inference_checkpoint = next(
+        checkpoint
+        for checkpoint in recorder.saved
+        if checkpoint.checkpoint_type == CHECKPOINT_INFERENCE
+    )
+    persist_calls = len(governance.persist_calls)
+
+    resumed_governance = FakeGovernanceRepository()
+    resumed = build_processor(
+        FakeUnderwritingRepository(view),
+        FakeGateway(lambda request: valid_payload(view, suite)),
+        resumed_governance,
+    )
+    await resumed.process(maker_task(), inference_checkpoint, CheckpointRecorder().save)
+
+    # Inference already ran in the prior attempt: the resume never revisits the
+    # pre-inference manifest step.
+    assert len(governance.persist_calls) == persist_calls == 1
+    assert resumed_governance.persist_calls == []
 
 
 def test_response_schema_is_closed_and_decision_free() -> None:

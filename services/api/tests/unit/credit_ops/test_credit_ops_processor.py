@@ -40,12 +40,14 @@ from creditops.application.credit_ops.processor import (
     CHECKPOINT_PERSISTED,
     CreditOperationsProcessor,
 )
+from creditops.application.governance import goal_contract_for
 from creditops.application.ports.credit_ops import (
     ChallengeDispositionSummary,
     CreditOpsUpstreamView,
     OpenGapRecord,
     PersistedCreditOpsOutput,
 )
+from creditops.application.ports.governance import PersistedManifest
 from creditops.application.ports.model_gateway import (
     InferenceResult,
     InferenceUnavailableError,
@@ -56,6 +58,7 @@ from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
 from creditops.application.use_cases.run_worker_once import WorkerOutcome
 from creditops.domain.credit_ops import CreditOpsPackage
 from creditops.domain.enums import TaskStatus
+from creditops.domain.goal_contracts import ContextManifest, compute_context_hash
 from creditops.domain.orchestration import TaskType
 from creditops.domain.underwriting import GapBlockingLevel
 
@@ -325,15 +328,41 @@ class CheckpointRecorder:
         return [checkpoint.checkpoint_type for checkpoint in self.saved]
 
 
+class FakeGovernanceRepository:
+    """Dedupes context manifests per (task, contextHash), like the durable
+    partial unique index; records every persist call."""
+
+    def __init__(self) -> None:
+        self.persist_calls: list[ContextManifest] = []
+        self.manifests: dict[tuple[UUID | None, str], UUID] = {}
+
+    async def persist_manifest(self, manifest: ContextManifest) -> PersistedManifest:
+        self.persist_calls.append(manifest)
+        context_hash = compute_context_hash(manifest)
+        key = (manifest.task_id, context_hash)
+        existing = self.manifests.get(key)
+        if existing is not None:
+            return PersistedManifest(existing, context_hash, created=False)
+        self.manifests[key] = manifest.id
+        return PersistedManifest(manifest.id, context_hash, created=True)
+
+    async def ensure_goal_contract_rows(self, contracts: object) -> None:
+        del contracts
+
+
 def build_processor(
-    repository: FakeCreditOpsRepository, gateway: FakeGateway | None
+    repository: FakeCreditOpsRepository,
+    gateway: FakeGateway | None,
+    governance: FakeGovernanceRepository | None = None,
 ) -> CreditOperationsProcessor:
     inference = (
         RunMemoInference(gateway, prompt=CreditOpsPrompt("prompt-vi-test"))
         if gateway is not None
         else None
     )
-    return CreditOperationsProcessor(repository, inference, clock=lambda: NOW)
+    return CreditOperationsProcessor(
+        repository, inference, governance=governance, clock=lambda: NOW
+    )
 
 
 @pytest.mark.asyncio
@@ -601,6 +630,72 @@ async def test_llm_cannot_alter_the_deterministic_skeleton() -> None:
     assert package.document_requests[0].originating_gap_id == gap.gap_id
     assert all(a.execution_status.value == "DRAFT" for a in package.proposed_actions)
     assert package.package_completeness.all_required_present is True
+
+
+@pytest.mark.asyncio
+async def test_context_manifest_persisted_before_inference_from_registry_contract() -> None:
+    view = build_view()
+    gap = OpenGapRecord(
+        gap_id=uuid4(),
+        missing_information_vi="Ho so bo sung (mo phong).",
+        blocking_level=GapBlockingLevel.CONDITIONAL,
+        status="FORMAL",
+    )
+    disposition = ChallengeDispositionSummary(challenge_id=uuid4(), disposition_type="ACCEPTED")
+    governance = FakeGovernanceRepository()
+    repository = FakeCreditOpsRepository(
+        view=view, open_gaps=(gap,), dispositions=(disposition,)
+    )
+    processor = build_processor(
+        repository, FakeGateway(lambda request: valid_payload(view)), governance
+    )
+
+    result = await processor.process(ops_task(), None, CheckpointRecorder().save)
+
+    assert result.status is WorkerOutcome.SUCCEEDED
+    assert len(governance.persist_calls) == 1
+    (manifest,) = governance.persist_calls
+    contract = goal_contract_for(TaskType.CREDIT_OPERATIONS)
+    assert manifest.goal_contract_id == contract.id
+    # Every upstream handoff (intake/underwriting/legal/risk-review), the open
+    # gap and the human challenge disposition are recorded as refs.
+    assert set(manifest.upstream_artifact_refs) == {
+        view.intake_handoff_id,
+        view.underwriting_handoff_id,
+        view.legal_handoff_id,
+        view.risk_review_handoff_id,
+    }
+    assert manifest.open_gap_refs == (gap.gap_id,)
+    assert manifest.human_decision_refs == (disposition.challenge_id,)
+    assert processor._governance_profile.goal_contract == contract
+    assert any(
+        e.event_type == "CREDIT_OPS_CONTEXT_MANIFEST_PERSISTED"
+        for e in repository.audit_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_manifest_persisted_even_when_inference_unavailable() -> None:
+    governance = FakeGovernanceRepository()
+    repository = FakeCreditOpsRepository(view=build_view())
+    processor = build_processor(repository, UnavailableGateway(), governance)
+
+    result = await processor.process(ops_task(), None, CheckpointRecorder().save)
+
+    assert result.status is WorkerOutcome.FAILED_MANUAL_REVIEW
+    assert len(governance.manifests) == 1
+    assert repository.packages == {}
+
+
+@pytest.mark.asyncio
+async def test_no_manifest_persisted_without_a_gateway() -> None:
+    governance = FakeGovernanceRepository()
+    processor = build_processor(FakeCreditOpsRepository(view=build_view()), None, governance)
+
+    result = await processor.process(ops_task(), None, CheckpointRecorder().save)
+
+    assert result.status is WorkerOutcome.FAILED_MANUAL_REVIEW
+    assert governance.persist_calls == []
 
 
 def test_response_schema_forbids_non_memo_keys() -> None:

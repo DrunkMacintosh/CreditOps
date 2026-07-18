@@ -19,6 +19,7 @@ from creditops.application.risk_review.processor import IndependentRiskReviewPro
 from creditops.application.underwriting.processor import CreditUnderwritingProcessor
 from creditops.config import Settings
 from creditops.domain.orchestration import TaskType
+from creditops.infrastructure.postgres.governance import PostgresGovernanceRepository
 from creditops.infrastructure.supabase.queue import (
     AGENT_TASK_QUEUE_NAME,
     DOCUMENT_TASK_QUEUE_NAME,
@@ -69,6 +70,25 @@ def test_agent_mode_builds_the_full_specialist_registry() -> None:
     assert isinstance(
         registry.processor_for(TaskType.CREDIT_OPERATIONS), CreditOperationsProcessor
     )
+
+
+def test_agent_mode_wires_governance_into_the_four_specialist_processors() -> None:
+    # The append-only governance store is constructed when the DB is configured
+    # and injected into every specialist processor, so each call's context
+    # manifest is persisted before inference.
+    runtime = build_runtime(_settings())
+
+    assert runtime is not None
+    assert isinstance(runtime.governance, PostgresGovernanceRepository)
+    registry = runtime.registry
+    for task_type in (
+        TaskType.CREDIT_UNDERWRITING,
+        TaskType.LEGAL_COMPLIANCE_COLLATERAL,
+        TaskType.INDEPENDENT_RISK_REVIEW,
+        TaskType.CREDIT_OPERATIONS,
+    ):
+        processor = registry.processor_for(task_type)
+        assert processor._governance is runtime.governance
 
 
 def test_document_mode_reads_the_document_queue() -> None:

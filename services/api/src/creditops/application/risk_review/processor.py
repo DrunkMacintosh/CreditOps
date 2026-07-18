@@ -44,6 +44,12 @@ from uuid import NAMESPACE_OID, UUID, uuid4, uuid5
 
 from pydantic import ValidationError
 
+from creditops.application.governance import (
+    RISK_REVIEW_PRE_ANALYSIS_GOVERNANCE,
+    governance_for,
+    manifest_from_governance,
+)
+from creditops.application.ports.governance import GovernanceRepository
 from creditops.application.ports.model_gateway import (
     InferenceError,
     InferenceUnavailableError,
@@ -51,7 +57,11 @@ from creditops.application.ports.model_gateway import (
 from creditops.application.ports.orchestration import OrchestrationAuditEvent
 from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
 from creditops.application.ports.risk_review import (
+    CheckerEvidenceView,
+    MakerOutputsView,
+    OpenGapRecord,
     PersistedCheckerOutput,
+    PreAnalysisEvidenceView,
     PreAnalysisRecord,
     RiskReviewRepository,
 )
@@ -74,7 +84,13 @@ from creditops.application.use_cases.run_worker_once import (
     StageResult,
     WorkerOutcome,
 )
+from creditops.domain.goal_contracts import UNIVERSAL_PROHIBITED_ACTIONS
+from creditops.domain.orchestration import TaskType
 from creditops.domain.risk_review import RISK_REVIEW_AGENT_ROLE, RiskReviewAssessment
+
+#: The service identity under which the worker acts when it builds a context
+#: manifest (see the underwriting processor for the rationale).
+_SERVICE_IDENTITY = "service:agent-worker"
 
 CHECKPOINT_EVIDENCE_VIEW = "EVIDENCE_VIEW_BUILT"
 CHECKPOINT_MAKER_OUTPUTS = "MAKER_OUTPUTS_LOADED"
@@ -95,11 +111,26 @@ class IndependentRiskReviewProcessor:
         inference: RunCheckerInference | None,
         pre_analysis_inference: RunPreAnalysisInference | None = None,
         *,
+        governance: GovernanceRepository | None = None,
         clock: Callable[[], datetime] | None = None,
         execution_id_factory: Callable[[], UUID] | None = None,
     ) -> None:
         self._repository = repository
         self._inference = inference
+        self._governance = governance
+        # This task runs TWO bounded model calls, each with its OWN committed
+        # goal contract: the blind Pass A pre-analysis and the Pass B checker
+        # assessment.  Both are fetched unconditionally so the universal
+        # human-only bans are enforced at construction (see the underwriting
+        # processor); the Pass B contract is the task type's primary contract.
+        self._governance_profile = governance_for(TaskType.INDEPENDENT_RISK_REVIEW)
+        self._pre_analysis_governance = RISK_REVIEW_PRE_ANALYSIS_GOVERNANCE
+        assert UNIVERSAL_PROHIBITED_ACTIONS.issubset(
+            self._governance_profile.goal_contract.prohibited_actions
+        ), "risk-review checker goal contract must restate every universal ban"
+        assert UNIVERSAL_PROHIBITED_ACTIONS.issubset(
+            self._pre_analysis_governance.goal_contract.prohibited_actions
+        ), "risk-review blind pre-analysis goal contract must restate every universal ban"
         # Worker composition wires only the Pass B runner; derive the blind
         # Pass A runner over the very same reasoning endpoint when one is not
         # injected explicitly, so both passes share one endpoint and both are
@@ -233,6 +264,12 @@ class IndependentRiskReviewProcessor:
             },
         )
 
+        # Governance: snapshot exactly what the Pass B checker call is
+        # authorized to see (confirmed facts, BOTH maker handoffs and open gaps)
+        # BEFORE inference; a distinct manifest from the blind Pass A one, and
+        # reached only on the fresh pre-inference path.
+        await self._persist_checker_manifest(task, view, outputs, open_gaps)
+
         try:
             assessment = await self._inference.infer(
                 view=view,
@@ -313,6 +350,14 @@ class IndependentRiskReviewProcessor:
             return StageResult(
                 WorkerOutcome.SUPERSEDED, "case version advanced past this task's bound version"
             )
+
+        # Governance: the blind Pass A manifest records ONLY the blind evidence
+        # view (Confirmed Facts) and NO maker output -- the manifest is
+        # structurally incapable of naming a maker artifact, proving blind
+        # separation at the audit layer.  Persisted BEFORE the blind call and
+        # reached only when Pass A actually runs (a resume from
+        # PRE_ANALYSIS_PERSISTED or a durable blind row returns above).
+        await self._persist_pre_analysis_manifest(task, blind_view)
 
         pre_execution_id = self._execution_id_factory()
         try:
@@ -401,6 +446,86 @@ class IndependentRiskReviewProcessor:
             },
         )
         return StageResult()
+
+    async def _persist_pre_analysis_manifest(
+        self, task: TaskRecord, blind_view: PreAnalysisEvidenceView
+    ) -> None:
+        """Persist the blind Pass A context manifest (no-op without a wired
+        governance repository)."""
+
+        if self._governance is None:
+            return
+        manifest = manifest_from_governance(
+            self._pre_analysis_governance,
+            case_id=task.case_id,
+            case_version=task.case_version,
+            task_id=task.id,
+            actor_or_service_identity=_SERVICE_IDENTITY,
+            case_roles=(RISK_REVIEW_AGENT_ROLE,),
+            authoritative_fact_refs=tuple(
+                fact.confirmed_fact_id for fact in blind_view.confirmed_facts
+            ),
+        )
+        persisted = await self._governance.persist_manifest(manifest)
+        await self._audit(
+            task,
+            "RISK_REVIEW_PRE_ANALYSIS_CONTEXT_MANIFEST_PERSISTED",
+            {
+                "contextManifestId": str(persisted.manifest_id),
+                "contextHash": persisted.context_hash,
+                "goalContractKey": self._pre_analysis_governance.contract_key,
+                "goalContractVersion": (
+                    self._pre_analysis_governance.goal_contract.version
+                ),
+                "pass": "A",
+            },
+        )
+
+    async def _persist_checker_manifest(
+        self,
+        task: TaskRecord,
+        view: CheckerEvidenceView,
+        outputs: MakerOutputsView,
+        open_gaps: tuple[OpenGapRecord, ...],
+    ) -> None:
+        """Persist the Pass B checker context manifest (no-op without a wired
+        governance repository)."""
+
+        if self._governance is None:
+            return
+        upstream_refs = tuple(
+            handoff_id
+            for handoff_id in (
+                outputs.underwriting_handoff_id,
+                outputs.legal_handoff_id,
+            )
+            if handoff_id is not None
+        )
+        manifest = manifest_from_governance(
+            self._governance_profile,
+            case_id=task.case_id,
+            case_version=task.case_version,
+            task_id=task.id,
+            actor_or_service_identity=_SERVICE_IDENTITY,
+            case_roles=(RISK_REVIEW_AGENT_ROLE,),
+            authoritative_fact_refs=tuple(
+                fact.confirmed_fact_id for fact in view.confirmed_facts
+            ),
+            upstream_artifact_refs=upstream_refs,
+            open_gap_refs=tuple(gap.gap_id for gap in open_gaps),
+        )
+        persisted = await self._governance.persist_manifest(manifest)
+        await self._audit(
+            task,
+            "RISK_REVIEW_CONTEXT_MANIFEST_PERSISTED",
+            {
+                "contextManifestId": str(persisted.manifest_id),
+                "contextHash": persisted.context_hash,
+                "goalContractKey": self._governance_profile.contract_key,
+                "goalContractVersion": self._governance_profile.goal_contract.version,
+                "pass": "B",
+            },
+        )
 
     @staticmethod
     def _handoff_id_for(assessment: RiskReviewAssessment) -> UUID:

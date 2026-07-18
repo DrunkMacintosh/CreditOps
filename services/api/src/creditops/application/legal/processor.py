@@ -25,7 +25,11 @@ from uuid import NAMESPACE_OID, UUID, uuid4, uuid5
 
 from pydantic import ValidationError
 
-from creditops.application.legal.controlled_checks import run_controlled_checks
+from creditops.application.governance import governance_for, manifest_from_governance
+from creditops.application.legal.controlled_checks import (
+    ControlledCheckSuite,
+    run_controlled_checks,
+)
 from creditops.application.legal.corpus import PolicyCorpus, try_load_default_corpus
 from creditops.application.legal.evidence import (
     check_ownership_consistency,
@@ -38,8 +42,10 @@ from creditops.application.legal.reviewer import (
     controlled_check_results_from_assessment,
     persist_reviewer_output,
 )
+from creditops.application.ports.governance import GovernanceRepository
 from creditops.application.ports.legal import (
     ControlledChecksGateway,
+    LegalEvidenceView,
     LegalRepository,
     PersistedLegalOutput,
 )
@@ -54,7 +60,9 @@ from creditops.application.use_cases.run_worker_once import (
     StageResult,
     WorkerOutcome,
 )
+from creditops.domain.goal_contracts import UNIVERSAL_PROHIBITED_ACTIONS
 from creditops.domain.legal import LEGAL_AGENT_ROLE, LegalComplianceAssessment
+from creditops.domain.orchestration import TaskType
 from creditops.infrastructure.mock.legal_checks import MockControlledChecksGateway
 
 CHECKPOINT_EVIDENCE_VIEW = "EVIDENCE_VIEW_BUILT"
@@ -62,6 +70,10 @@ CHECKPOINT_CORPUS = "CORPUS_LOADED"
 CHECKPOINT_CONTROLLED_CHECKS = "CONTROLLED_CHECKS_RUN"
 CHECKPOINT_INFERENCE = "INFERENCE_VALIDATED"
 CHECKPOINT_PERSISTED = "ASSESSMENT_PERSISTED"
+
+#: The service identity under which the worker acts when it builds a context
+#: manifest (see the underwriting processor for the rationale).
+_SERVICE_IDENTITY = "service:agent-worker"
 
 #: Fixed deterministic query covering every synthetic policy topic — retrieval
 #: stays deterministic and independent of free-text case content.
@@ -80,6 +92,7 @@ class LegalComplianceProcessor:
         repository: LegalRepository,
         inference: RunLegalInference | None,
         *,
+        governance: GovernanceRepository | None = None,
         controlled_checks_gateway: ControlledChecksGateway | None = None,
         clock: Callable[[], datetime] | None = None,
         execution_id_factory: Callable[[], UUID] | None = None,
@@ -87,6 +100,16 @@ class LegalComplianceProcessor:
     ) -> None:
         self._repository = repository
         self._inference = inference
+        self._governance = governance
+        # The committed goal contract bounding this task type (fetched
+        # unconditionally so the universal human-only bans are enforced at
+        # construction; see the underwriting processor).
+        self._governance_profile = governance_for(
+            TaskType.LEGAL_COMPLIANCE_COLLATERAL
+        )
+        assert UNIVERSAL_PROHIBITED_ACTIONS.issubset(
+            self._governance_profile.goal_contract.prohibited_actions
+        ), "legal goal contract must restate every universal prohibited action"
         # The only permitted controlled-check adapter is the clearly-labelled
         # mock — this project never wires a real compliance provider.
         self._controlled_checks_gateway = (
@@ -218,6 +241,12 @@ class LegalComplianceProcessor:
             },
         )
 
+        # Governance: snapshot exactly what this reviewer call is authorized to
+        # see (confirmed facts, in-scope documents, controlled-check results and
+        # the policy-corpus version) BEFORE inference; idempotent per
+        # (task, contextHash) and reached only on the fresh pre-inference path.
+        await self._persist_context_manifest(task, view, controlled_checks, corpus)
+
         try:
             assessment = await self._inference.infer(
                 view=view,
@@ -285,6 +314,54 @@ class LegalComplianceProcessor:
             },
         )
         return StageResult()
+
+    async def _persist_context_manifest(
+        self,
+        task: TaskRecord,
+        view: LegalEvidenceView,
+        controlled_checks: ControlledCheckSuite,
+        corpus: PolicyCorpus | None,
+    ) -> None:
+        """Build and persist this reviewer call's context manifest (no-op
+        without a wired governance repository)."""
+
+        if self._governance is None:
+            return
+        tool_versions = {
+            result.tool_name: result.tool_version
+            for result in controlled_checks.results
+        }
+        if corpus is not None:
+            tool_versions["policy_corpus"] = corpus.version
+        manifest = manifest_from_governance(
+            self._governance_profile,
+            case_id=task.case_id,
+            case_version=task.case_version,
+            task_id=task.id,
+            actor_or_service_identity=_SERVICE_IDENTITY,
+            case_roles=(LEGAL_AGENT_ROLE,),
+            tool_versions=tool_versions,
+            authoritative_fact_refs=tuple(
+                fact.confirmed_fact_id for fact in view.confirmed_facts
+            ),
+            upstream_artifact_refs=tuple(
+                document.document_version_id for document in view.documents
+            ),
+            tool_result_refs=tuple(
+                result.invocation_id for result in controlled_checks.results
+            ),
+        )
+        persisted = await self._governance.persist_manifest(manifest)
+        await self._audit(
+            task,
+            "LEGAL_CONTEXT_MANIFEST_PERSISTED",
+            {
+                "contextManifestId": str(persisted.manifest_id),
+                "contextHash": persisted.context_hash,
+                "goalContractKey": self._governance_profile.contract_key,
+                "goalContractVersion": self._governance_profile.goal_contract.version,
+            },
+        )
 
     @staticmethod
     def _handoff_id_for(assessment: LegalComplianceAssessment) -> UUID:
