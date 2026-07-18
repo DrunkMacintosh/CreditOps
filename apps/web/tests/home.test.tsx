@@ -30,9 +30,11 @@ it("exposes both hero CTAs with the correct hrefs", () => {
   expect(
     screen.getByRole("link", { name: "Vào hàng việc của tôi" }),
   ).toHaveAttribute("href", "/cong-viec");
-  expect(
-    screen.getByRole("link", { name: "Danh sách hồ sơ" }),
-  ).toHaveAttribute("href", "/ho-so");
+  const caseLinks = screen.getAllByRole("link", { name: "Hồ sơ" });
+  expect(caseLinks.length).toBeGreaterThan(0);
+  for (const link of caseLinks) {
+    expect(link).toHaveAttribute("href", "/ho-so");
+  }
 });
 
 it("shows a truthful synthetic-data label on the landing page", () => {
@@ -55,7 +57,7 @@ it("states the human-authority boundary", () => {
   render(<Home />);
   expect(
     screen.getByText(
-      /Agent không bao giờ phê duyệt hoặc từ chối — con người có thẩm quyền quyết định/,
+      /Agent không bao giờ phê duyệt hoặc từ chối; con người có thẩm quyền quyết định/,
     ),
   ).toBeVisible();
 });
@@ -97,9 +99,9 @@ describe("demo session CTA", () => {
     expect(
       screen.getByRole("link", { name: "Vào hàng việc của tôi" }),
     ).toHaveAttribute("href", "/cong-viec");
-    expect(
-      screen.getByRole("link", { name: "Danh sách hồ sơ" }),
-    ).toHaveAttribute("href", "/ho-so");
+    for (const link of screen.getAllByRole("link", { name: "Hồ sơ" })) {
+      expect(link).toHaveAttribute("href", "/ho-so");
+    }
   });
 
   it("mints a demo session and redirects into the working app with its caseId", async () => {

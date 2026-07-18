@@ -1,24 +1,33 @@
-"use client";
-
 import Link from "next/link";
-import React, { useCallback, useState } from "react";
+import React from "react";
+
+import { DemoCta } from "../components/landing/demo-cta";
+import { MobileNav } from "../components/shell/mobile-nav";
 
 import styles from "./landing.module.css";
 
-// The landing page's demo CTA needs client-side interactivity (mint a session,
-// then redirect using its response body), which requires this file to be a
-// Client Component — Next.js does not allow `export const metadata` from one,
-// so the page-specific <title>/description fall back to the root layout's
-// (app/layout.tsx) metadata instead of overriding it here.
+export const metadata = {
+  title: "CreditOps EvidenceGraph | AI hỗ trợ chuẩn bị và phản biện hồ sơ",
+  description:
+    "Nền tảng evidence-first tổ chức hồ sơ cấp vốn lưu động SME thành một Credit Case Digital Twin có cấu trúc, phiên bản và chuỗi nguồn gốc. AI chuẩn bị và phản biện; con người quyết định.",
+  openGraph: {
+    title: "CreditOps EvidenceGraph",
+    description:
+      "AI hỗ trợ chuẩn bị và phản biện hồ sơ tín dụng. Con người đưa ra quyết định.",
+    type: "website",
+    locale: "vi_VN",
+    siteName: "CreditOps EvidenceGraph",
+  },
+};
 
-// The target provenance chain (docs/BANKING_WORKFLOW.md, README) — every
+// The target provenance chain (docs/BANKING_WORKFLOW.md, README): every
 // downstream artifact traces back to a document version and source region.
 const PROVENANCE = [
   { doc: "Tài liệu khách hàng", note: "phiên bản bất biến, có nguồn gốc" },
   { doc: "Dữ kiện có vị trí nguồn", note: "trang / vùng và độ tin cậy" },
   { doc: "Phép tính & trích dẫn", note: "deterministic, có căn cứ" },
   { doc: "Kết luận, rủi ro, khoảng trống", note: "được hỗ trợ bằng chứng" },
-  { doc: "Phản biện độc lập", note: "maker–checker tách biệt" },
+  { doc: "Phản biện độc lập", note: "maker-checker tách biệt" },
   { doc: "Quyết định của con người", note: "thẩm quyền cuối cùng" },
 ];
 
@@ -68,7 +77,7 @@ const ROLES = [
 ];
 
 // The complete conceptual corporate-credit lifecycle (docs/BANKING_WORKFLOW.md).
-// The platform focuses on stages 2–6; the rest are context / later phase.
+// The platform focuses on stages 2-6; the rest are context / later phase.
 const STAGES = [
   { label: "Nhận diện & tiếp cận khách hàng", inScope: false },
   { label: "Xác định nhu cầu vốn", inScope: true },
@@ -88,23 +97,19 @@ const STAGES = [
 
 const EVIDENCE = [
   {
-    mark: "1",
     title: "Mọi kết luận dẫn về bằng chứng",
-    body: "Mỗi finding trỏ tới tài liệu, trang và vùng nguồn cụ thể — không có kết luận treo, không dữ kiện bịa.",
+    body: "Mỗi finding trỏ tới tài liệu, trang và vùng nguồn cụ thể: không có kết luận treo, không dữ kiện bịa.",
   },
   {
-    mark: "2",
     title: "Mọi cổng do con người",
     body: "Agent chuẩn bị và phản biện; yêu cầu bổ sung, xử lý ngoại lệ và phê duyệt đều qua người có thẩm quyền.",
   },
   {
-    mark: "3",
     title: "Audit append-only",
     body: "Mọi thay đổi trạng thái được ghi bất biến; rerun không làm khoảng trống hay challenge biến mất khỏi lịch sử.",
   },
   {
-    mark: "4",
-    title: "Maker–checker",
+    title: "Maker-checker",
     body: "Thẩm định (maker) và rà soát rủi ro độc lập (checker) tách biệt; không ai vừa lập vừa tự thông qua.",
   },
 ];
@@ -133,39 +138,6 @@ const ARCHITECTURE = [
 ];
 
 export default function Home() {
-  const [startingDemo, setStartingDemo] = useState(false);
-  const [demoError, setDemoError] = useState<string | null>(null);
-
-  const startDemo = useCallback(async () => {
-    setDemoError(null);
-    setStartingDemo(true);
-    try {
-      const response = await fetch("/api/demo-session", {
-        method: "POST",
-        headers: { accept: "application/json" },
-        credentials: "include",
-        cache: "no-store",
-      });
-      const body: unknown = await response.json().catch(() => null);
-      const caseId =
-        response.ok &&
-        typeof body === "object" &&
-        body !== null &&
-        typeof (body as { caseId?: unknown }).caseId === "string"
-          ? (body as { caseId: string }).caseId
-          : null;
-      if (caseId === null) {
-        throw new Error("DEMO_SESSION_FAILED");
-      }
-      window.location.assign(`/ho-so/${encodeURIComponent(caseId)}/tiep-nhan`);
-    } catch {
-      setStartingDemo(false);
-      setDemoError(
-        "Không thể khởi tạo phiên demo lúc này. Vui lòng thử lại sau ít phút.",
-      );
-    }
-  }, []);
-
   return (
     <div className={styles.page}>
       <a className="skip-link" href="#noi-dung-chinh">
@@ -190,6 +162,10 @@ export default function Home() {
           <Link href="/cong-viec">Hàng việc của tôi</Link>
           <Link href="/ho-so">Hồ sơ</Link>
         </nav>
+        <MobileNav>
+          <Link href="/cong-viec">Hàng việc của tôi</Link>
+          <Link href="/ho-so">Hồ sơ</Link>
+        </MobileNav>
       </header>
 
       <main className={styles.main} id="noi-dung-chinh" tabIndex={-1}>
@@ -204,46 +180,18 @@ export default function Home() {
                 CreditOps EvidenceGraph
               </h1>
               <p className={styles.heroTagline}>
-                AI hỗ trợ chuẩn bị và phản biện hồ sơ — con người đưa ra quyết
-                định.
+                AI hỗ trợ chuẩn bị và phản biện hồ&nbsp;sơ.{" "}
+                <em className={styles.heroTaglineHuman}>
+                  Con người đưa ra quyết định.
+                </em>
               </p>
-              <p className={styles.heroLede}>
-                Nền tảng tổ chức hồ sơ cấp vốn lưu động doanh nghiệp thành một
-                bản sao số có cấu trúc, phiên bản và chuỗi nguồn gốc kiểm chứng
-                được — thay vì một cuộc hội thoại khó lần lại nguồn.
-              </p>
-              <div className={styles.heroCtas}>
-                <button
-                  className={`button ${styles.ctaPrimary}`}
-                  disabled={startingDemo}
-                  onClick={() => void startDemo()}
-                  type="button"
-                >
-                  {startingDemo
-                    ? "Đang khởi tạo phiên demo…"
-                    : "Trải nghiệm demo (dữ liệu tổng hợp)"}
-                </button>
-                <Link
-                  className={`button ${styles.ctaSecondary}`}
-                  href="/cong-viec"
-                >
-                  Vào hàng việc của tôi
-                </Link>
-                <Link
-                  className={`button ${styles.ctaSecondary}`}
-                  href="/ho-so"
-                >
-                  Danh sách hồ sơ
-                </Link>
-              </div>
-              {demoError ? (
-                <div className="state-panel" role="alert">
-                  <p>{demoError}</p>
-                </div>
-              ) : null}
-              <p className={styles.heroLede}>
+              <DemoCta />
+              {/* Synthetic-data disclosure for the demo entry point; kept in
+                  the hero deliberately so the honest-labeling boundary is
+                  visible before anyone clicks. */}
+              <p className={styles.heroNote}>
                 Phiên demo tạo một hồ sơ tín dụng tổng hợp mới và đưa bạn thẳng
-                vào bước tiếp nhận tài liệu — dữ liệu hoàn toàn tổng hợp, không
+                vào bước tiếp nhận tài liệu; dữ liệu hoàn toàn tổng hợp, không
                 phải khách hàng thật.
               </p>
             </div>
@@ -277,7 +225,6 @@ export default function Home() {
         >
           <div className={styles.inner}>
             <div className={styles.sectionHead}>
-              <p className={styles.eyebrow}>Khái niệm cốt lõi</p>
               <h2 className={styles.sectionTitle} id="twin-title">
                 Credit Case Digital Twin
               </h2>
@@ -331,33 +278,46 @@ export default function Home() {
         >
           <div className={styles.inner}>
             <div className={styles.sectionHead}>
-              <p className={styles.eyebrow}>
-                Kiến trúc multi-agent có giới hạn thẩm quyền
-              </p>
               <h2 className={styles.sectionTitle} id="agents-title">
                 Đội ngũ 8 agent chuyên trách
               </h2>
               <p className={styles.sectionLede}>
                 Mỗi vai trò là một agent ở tầng ứng dụng với nhiệm vụ, công cụ,
-                quyền và schema đầu ra riêng — không phải tám chatbot cùng nói về
+                quyền và schema đầu ra riêng, không phải tám chatbot cùng nói về
                 một hồ sơ.
               </p>
             </div>
             <p className={styles.boundaryBanner}>
-              Agent không bao giờ phê duyệt hoặc từ chối — con người có thẩm
+              Agent không bao giờ phê duyệt hoặc từ chối; con người có thẩm
               quyền quyết định.
             </p>
-            <div className={styles.agentGrid}>
-              {ROLES.map((role, index) => (
-                <article className={styles.roleCard} key={role.name}>
-                  <span className={styles.roleIndex}>
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <h3 className={styles.roleName}>{role.name}</h3>
-                  <p className={styles.roleDuty}>{role.duty}</p>
-                  <span className={styles.roleScope}>{role.scope}</span>
-                </article>
-              ))}
+            <div className={styles.agentGroups}>
+              <div className={styles.agentGroup}>
+                <p className={styles.agentGroupLabel}>Trong phạm vi hiện tại</p>
+                <ul className={styles.agentList}>
+                  {ROLES.filter((role) => role.scope === "Trong phạm vi").map(
+                    (role) => (
+                      <li className={styles.agentRow} key={role.name}>
+                        <h3 className={styles.roleName}>{role.name}</h3>
+                        <p className={styles.roleDuty}>{role.duty}</p>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </div>
+              <div className={`${styles.agentGroup} ${styles.agentGroupLater}`}>
+                <p className={styles.agentGroupLabel}>Giai đoạn sau</p>
+                <ul className={styles.agentList}>
+                  {ROLES.filter((role) => role.scope === "Giai đoạn sau").map(
+                    (role) => (
+                      <li className={styles.agentRow} key={role.name}>
+                        <h3 className={styles.roleName}>{role.name}</h3>
+                        <p className={styles.roleDuty}>{role.duty}</p>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </div>
             </div>
           </div>
         </section>
@@ -369,40 +329,55 @@ export default function Home() {
         >
           <div className={styles.inner}>
             <div className={styles.sectionHead}>
-              <p className={styles.eyebrow}>Phủ toàn bộ vòng đời</p>
               <h2 className={styles.sectionTitle} id="stages-title">
                 Vòng đời 14 giai đoạn
               </h2>
               <p className={styles.sectionLede}>
                 Luồng tín dụng doanh nghiệp gồm 14 giai đoạn; nền tảng hiện tập
-                trung vào giai đoạn 2–6. Đây là bối cảnh dự án, không phải quy
+                trung vào giai đoạn 2-6. Đây là bối cảnh dự án, không phải quy
                 trình chính thức của một ngân hàng cụ thể.
               </p>
             </div>
-            <ol className={styles.stageStrip}>
-              {STAGES.map((stage, index) => (
-                <li
-                  className={`${styles.stage} ${
-                    stage.inScope ? styles.stageInScope : ""
-                  }`}
-                  key={stage.label}
-                >
-                  <span className={styles.stageNum}>{index + 1}</span>
-                  <span className={styles.stageLabel}>{stage.label}</span>
-                </li>
-              ))}
-            </ol>
-            <div className={styles.stageLegend}>
-              <span className={styles.legendItem}>
-                <span
-                  className={`${styles.legendSwatch} ${styles.legendSwatchScope}`}
-                />
-                Giai đoạn trọng tâm (2–6)
-              </span>
-              <span className={styles.legendItem}>
-                <span className={styles.legendSwatch} />
-                Bối cảnh / giai đoạn sau
-              </span>
+            <div className={styles.stagePhases}>
+              <div className={styles.stageFocus}>
+                <p className={styles.stagePhaseLabel}>
+                  Trọng tâm nền tảng · giai đoạn 2-6
+                </p>
+                <ol className={styles.stageFocusList} start={2}>
+                  {STAGES.filter((stage) => stage.inScope).map(
+                    (stage, index) => (
+                      <li className={styles.stageFocusItem} key={stage.label}>
+                        <span className={styles.stageNum}>{index + 2}</span>
+                        <span className={styles.stageLabel}>{stage.label}</span>
+                      </li>
+                    ),
+                  )}
+                </ol>
+              </div>
+              <div className={styles.stageContext}>
+                <div className={styles.stageContextGroup}>
+                  <p className={styles.stagePhaseLabel}>Trước tiếp nhận</p>
+                  <ol className={styles.stageContextList}>
+                    <li className={styles.stageContextItem}>
+                      <span className={styles.stageContextNum}>1</span>
+                      {STAGES[0].label}
+                    </li>
+                  </ol>
+                </div>
+                <div className={styles.stageContextGroup}>
+                  <p className={styles.stagePhaseLabel}>Giai đoạn sau</p>
+                  <ol className={styles.stageContextList} start={7}>
+                    {STAGES.slice(6).map((stage, index) => (
+                      <li className={styles.stageContextItem} key={stage.label}>
+                        <span className={styles.stageContextNum}>
+                          {index + 7}
+                        </span>
+                        {stage.label}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -414,17 +389,13 @@ export default function Home() {
         >
           <div className={styles.inner}>
             <div className={styles.sectionHead}>
-              <p className={styles.eyebrow}>Vì sao đáng tin</p>
               <h2 className={styles.sectionTitle} id="evidence-title">
                 Kiểm chứng được từ gốc
               </h2>
             </div>
             <div className={styles.evidenceGrid}>
               {EVIDENCE.map((item) => (
-                <article className={styles.evidenceCard} key={item.title}>
-                  <span aria-hidden="true" className={styles.evidenceMark}>
-                    {item.mark}
-                  </span>
+                <article className={styles.evidenceItem} key={item.title}>
                   <h3>{item.title}</h3>
                   <p>{item.body}</p>
                 </article>
@@ -440,7 +411,6 @@ export default function Home() {
         >
           <div className={styles.inner}>
             <div className={styles.sectionHead}>
-              <p className={styles.eyebrow}>Kiến trúc mục tiêu</p>
               <h2 className={styles.sectionTitle} id="arch-title">
                 Kiến trúc
               </h2>

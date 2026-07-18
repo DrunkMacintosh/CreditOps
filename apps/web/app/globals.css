@@ -16,16 +16,26 @@
   --risk-soft: #faeeea;
   --info: #31566b;
   --info-soft: #eaf1f5;
+  /* Radius scale (locked): --radius-sm for buttons/inputs, --radius for cards,
+     --radius-lg for large panels. No other corner values. */
+  --radius-sm: 0.5rem;
   --radius: 0.75rem;
   --radius-lg: 1.25rem;
-  /* --font-mono-next is injected by next/font in layout.tsx; the literal name
-     and generic fallbacks keep the token resolving when the font is absent. */
+  /* --font-*-next are injected by next/font in layout.tsx; the literal names
+     and generic fallbacks keep the tokens resolving when the fonts are absent. */
   --font-mono: var(--font-mono-next), "IBM Plex Mono", ui-monospace, monospace;
+  --font-sans:
+    var(--font-sans-next), Inter, ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   color-scheme: light;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+  font-family: var(
+    --font-sans,
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    sans-serif
+  );
   background: var(--canvas, #f4f5f3);
   color: var(--ink, #14261f);
 }
@@ -65,8 +75,9 @@ main {
 h1 {
   margin: 0;
   font-size: clamp(2.25rem, 7vw, 4.5rem);
-  line-height: 0.98;
-  letter-spacing: -0.055em;
+  /* Vietnamese stacked diacritics (Ề, Ỗ, Ệ) clip below 1.08 leading. */
+  line-height: 1.08;
+  letter-spacing: -0.035em;
 }
 
 .boundary {
@@ -115,7 +126,7 @@ textarea {
   top: 0.75rem;
   left: 0.75rem;
   padding: 0.75rem 1rem;
-  border-radius: 0.5rem;
+  border-radius: var(--radius-sm, 0.5rem);
   background: var(--deep, #102c22);
   color: white;
   font-weight: 700;
@@ -127,7 +138,7 @@ textarea {
 }
 
 .app-header {
-  min-height: 5.25rem;
+  min-height: 4.25rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -185,7 +196,120 @@ textarea {
 }
 
 .primary-nav > a:not(.button) {
+  padding: 0.35rem 0;
+  border-bottom: 2px solid transparent;
   text-decoration: none;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.primary-nav > a:not(.button):hover {
+  border-bottom-color: var(--amber, #ba7d19);
+  color: var(--deep, #102c22);
+}
+
+/* Zero-JS mobile disclosure nav (details/summary). Visible only below 561px;
+   the inline nav is hidden there, so one nav exists per viewport. */
+.mobile-nav {
+  position: relative;
+  display: none;
+}
+
+.mobile-nav summary {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius-sm, 0.5rem);
+  cursor: pointer;
+  list-style: none;
+}
+
+.mobile-nav summary::-webkit-details-marker {
+  display: none;
+}
+
+.mobile-nav-icon,
+.mobile-nav-icon::before,
+.mobile-nav-icon::after {
+  display: block;
+  width: 1.1rem;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--deep, #102c22);
+}
+
+.mobile-nav-icon {
+  position: relative;
+}
+
+.mobile-nav-icon::before,
+.mobile-nav-icon::after {
+  content: "";
+  position: absolute;
+  left: 0;
+}
+
+.mobile-nav-icon::before {
+  top: -6px;
+}
+
+.mobile-nav-icon::after {
+  top: 6px;
+}
+
+.mobile-nav[open] .mobile-nav-icon {
+  background: transparent;
+}
+
+.mobile-nav[open] .mobile-nav-icon::before {
+  top: 0;
+  transform: rotate(45deg);
+}
+
+.mobile-nav[open] .mobile-nav-icon::after {
+  top: 0;
+  transform: rotate(-45deg);
+}
+
+.mobile-nav-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 40;
+  display: grid;
+  gap: 0.25rem;
+  min-width: 13rem;
+  padding: 0.6rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 16px 40px -16px rgba(16, 44, 34, 0.35);
+}
+
+.mobile-nav-panel a {
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius-sm, 0.5rem);
+  color: var(--deep, #102c22);
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.mobile-nav-panel a:hover {
+  background: #eef2ef;
+}
+
+@media (max-width: 560px) {
+  .mobile-nav {
+    display: block;
+  }
+
+  .primary-nav {
+    display: none;
+  }
 }
 
 /* Authority boundary: quiet single-line reminder, never louder than content. */
@@ -203,13 +327,8 @@ textarea {
   text-align: center;
 }
 
-.authority-boundary::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: var(--amber, #ba7d19);
+.authority-boundary {
+  border-top: 2px solid var(--amber, #ba7d19);
 }
 
 .app-main {
@@ -232,7 +351,7 @@ textarea {
   gap: 0.85rem;
   padding: 1.05rem 1.2rem;
   border: 1px solid #d9c69c;
-  border-radius: 0.8rem;
+  border-radius: var(--radius, 0.75rem);
   background: #fffbf2;
   color: #544322;
   font-size: 0.8rem;
@@ -295,11 +414,30 @@ textarea {
   justify-content: center;
   padding: 0.72rem 1rem;
   border: 1px solid transparent;
-  border-radius: 0.55rem;
+  border-radius: var(--radius-sm, 0.5rem);
   cursor: pointer;
   font-weight: 750;
   line-height: 1.1;
   text-decoration: none;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.button:active {
+  transform: translateY(1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+
+  .button:active {
+    transform: none;
+  }
 }
 
 .button:disabled {
@@ -352,7 +490,7 @@ textarea {
 .case-card {
   padding: 1.4rem;
   border: 1px solid #cbd4cf;
-  border-radius: 0.9rem;
+  border-radius: var(--radius, 0.75rem);
   background: #fff;
 }
 
@@ -440,7 +578,7 @@ textarea {
   gap: 0.9rem;
   padding: 2rem;
   border: 1px solid #cbd4cf;
-  border-radius: 0.9rem;
+  border-radius: var(--radius, 0.75rem);
   background: #fff;
 }
 

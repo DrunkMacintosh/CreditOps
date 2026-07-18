@@ -1,6 +1,7 @@
 import Link from "next/link";
 import React, { type ReactNode } from "react";
 
+import { MobileNav } from "./mobile-nav";
 import { SyntheticDataNotice } from "./synthetic-data-notice";
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -10,7 +11,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         Chuyển đến nội dung chính
       </a>
       <header className="app-header">
-        <Link aria-label="CreditOps EvidenceGraph — Danh sách hồ sơ" className="brand" href="/ho-so">
+        <Link aria-label="CreditOps EvidenceGraph, Danh sách hồ sơ" className="brand" href="/ho-so">
           <span aria-hidden="true" className="brand-mark">CE</span>
           <span>
             <strong>CreditOps</strong>
@@ -21,6 +22,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link href="/cong-viec">Hàng việc của tôi</Link>
           <Link href="/ho-so">Hồ sơ</Link>
         </nav>
+        <MobileNav>
+          <Link href="/cong-viec">Hàng việc của tôi</Link>
+          <Link href="/ho-so">Hồ sơ</Link>
+        </MobileNav>
       </header>
       <div className="authority-boundary" role="note">
         Hệ thống hỗ trợ chuẩn bị và rà soát bằng chứng; không phê duyệt hoặc từ chối cấp tín dụng. Con người có thẩm quyền quyết định.
