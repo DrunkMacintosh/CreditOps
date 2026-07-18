@@ -1,0 +1,81 @@
+name: FPT benchmark
+
+# Manual-only. Runs the committed synthetic Vietnamese holdout
+# (services/api/src/creditops/benchmarks/holdout.py) against a REAL managed FPT
+# endpoint via scripts/run_fpt_benchmark.py, using
+# FPTCatalog.for_benchmark_evaluation — the one path allowed to reach an
+# endpoint before a benchmark-pass record exists.
+#
+# This job PRODUCES EVIDENCE ONLY. It never edits
+# services/api/src/creditops/infrastructure/fpt/benchmark_records.py and never
+# activates a route: a human must review the uploaded evidence artifact and
+# the printed record/DECISION_LOG snippets, then commit the record in a
+# reviewed change. See docs/benchmarks/README.md.
+#
+# Runs against the protected `staging` GitHub environment so FPT_API_KEY and
+# the endpoint coordinates stay scoped to reviewer-approved runs, matching how
+# deploy.yml gates its Supabase/Cloud Run secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      capability:
+        description: "Which capability holdout to run"
+        type: choice
+        default: reasoning
+        options:
+          - reasoning
+          - embedding
+          - all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: creditops-fpt-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: Run FPT benchmark against live endpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    env:
+      FPT_API_KEY: ${{ secrets.FPT_API_KEY }}
+      FPT_REASONING_ENDPOINT_URL: ${{ vars.FPT_REASONING_ENDPOINT_URL }}
+      FPT_REASONING_ENDPOINT_ID: ${{ vars.FPT_REASONING_ENDPOINT_ID }}
+      FPT_EMBEDDING_ENDPOINT_URL: ${{ vars.FPT_EMBEDDING_ENDPOINT_URL }}
+      FPT_EMBEDDING_ENDPOINT_ID: ${{ vars.FPT_EMBEDDING_ENDPOINT_ID }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.8"
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      # SKIP/PASS/FAIL come from the script's own house style (see
+      # scripts/run_fpt_benchmark.py docstring). A SKIP means the requested
+      # capability's endpoint is not fully configured (missing secret/var), so
+      # this run can never be mistaken for live-provider evidence. The job
+      # step itself only fails (non-zero) on a real FAIL against a configured
+      # endpoint, never on SKIP.
+      - name: Run FPT benchmark harness
+        run: >-
+          uv run python scripts/run_fpt_benchmark.py
+          --capability "${{ inputs.capability }}"
+          --out-dir docs/benchmarks
+
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpt-benchmark-evidence-${{ inputs.capability }}-${{ github.run_id }}
+          path: docs/benchmarks/*-evidence.md
+          if-no-files-found: warn
+          retention-days: 90
