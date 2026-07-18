@@ -90,6 +90,108 @@ export interface ApiErrorDto {
   retryable: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Officer review workspace (document review, evidence, conflicts)
+//
+// The four endpoint paths below are CANONICAL per plan Task 8; the backend that
+// serves them is pending (plan Tasks 8–9), so the UI fails closed at runtime.
+// The `rationale` field on a corrected disposition and the exact conflict wire
+// shape are PROPOSED pending the canonical OpenAPI (plan Tasks 8–9); this
+// compatibility boundary normalizes them here so downstream UI does not.
+// ---------------------------------------------------------------------------
+
+export type FactDisposition = "ACCEPTED" | "CORRECTED" | "ABSENT" | "UNREADABLE";
+
+export type DocumentStage =
+  | "REGISTERED"
+  | "SECURITY_VALIDATED"
+  | "PARSED"
+  | "CLASSIFIED"
+  | "EXTRACTED"
+  | "INDEXED"
+  | "READY_FOR_OFFICER_REVIEW";
+
+export interface PageRegionDto {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CandidateFactDto {
+  id: string;
+  caseId: string;
+  caseVersion: number;
+  documentVersionId: string;
+  fieldKey: string;
+  proposedValue: string | number | boolean;
+  confidence: number;
+  source: PageRegionDto;
+}
+
+export interface DocumentReviewDto {
+  documentId: string;
+  caseId: string;
+  documentVersionId: string;
+  documentVersion: number; // used as expectedDocumentVersion on confirm
+  stage: DocumentStage;
+  fileName: string | null; // optional metadata, null when absent
+  pageCount: number | null;
+  candidates: CandidateFactDto[];
+}
+
+export interface CandidateDispositionDto {
+  candidateId: string;
+  disposition: FactDisposition;
+  correctedValue?: string; // REQUIRED iff disposition === "CORRECTED"
+  rationale?: string; // REQUIRED iff CORRECTED (PROPOSED wire field)
+}
+
+export interface ConfirmDocumentRequestDto {
+  expectedDocumentVersion: number;
+  dispositions: CandidateDispositionDto[];
+}
+
+export interface ConfirmedFactDto {
+  id: string;
+  caseId: string;
+  caseVersion: number;
+  candidateId: string;
+  confirmationId: string;
+  documentVersionId: string;
+  fieldKey: string;
+  value: string | number | boolean;
+  candidateValue: string | number | boolean;
+  source: PageRegionDto;
+  confirmedAt: string;
+  stale: boolean; // defaults false when absent
+}
+
+export interface ConflictSourceDto {
+  documentVersionId: string;
+  value: string | number | boolean;
+  source: PageRegionDto | null; // null when the wire omits it
+}
+
+export interface ConflictDto {
+  id: string;
+  caseId: string;
+  caseVersion: number;
+  fieldKey: string;
+  sources: ConflictSourceDto[]; // a conflict preserves every source (>= 2)
+  detectedAt: string | null;
+  stale: boolean;
+}
+
+export interface EvidenceListDto {
+  items: ConfirmedFactDto[];
+}
+
+export interface ConflictListDto {
+  items: ConflictDto[];
+}
+
 export interface CaseApi {
   listCases(): Promise<CreditCaseListDto>;
   getCase(caseId: string): Promise<CreditCaseDto>;
@@ -107,4 +209,14 @@ export interface UploadApi {
   ): Promise<CompleteUploadResponseDto>;
 }
 
-export type CreditOpsApi = CaseApi & UploadApi;
+export interface ReviewApi {
+  getDocumentReview(documentId: string): Promise<DocumentReviewDto>;
+  confirmDocument(
+    documentId: string,
+    request: ConfirmDocumentRequestDto,
+  ): Promise<void>;
+  listEvidence(caseId: string): Promise<EvidenceListDto>;
+  listConflicts(caseId: string): Promise<ConflictListDto>;
+}
+
+export type CreditOpsApi = CaseApi & UploadApi & ReviewApi;

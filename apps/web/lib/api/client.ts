@@ -1,17 +1,24 @@
 import type {
   CompleteUploadResponseDto,
+  ConfirmDocumentRequestDto,
+  ConflictListDto,
   CreateCaseRequestDto,
   CreateUploadIntentRequestDto,
   CreditCaseDto,
   CreditCaseListDto,
   CreditOpsApi,
+  DocumentReviewDto,
+  EvidenceListDto,
   UploadIntentDto,
 } from "./contracts";
 import {
   parseApiError,
   parseCompleteUpload,
+  parseConflictList,
   parseCreditCase,
   parseCreditCaseList,
+  parseDocumentReview,
+  parseEvidenceList,
   parseUploadIntent,
 } from "./schemas";
 
@@ -38,6 +45,9 @@ export function getVietnameseApiError(error: unknown): string {
   if (error instanceof ApiClientError || isDirectStorageError(error)) {
     if (error.code === "UPLOAD_INTENT_EXPIRED") {
       return "Phiên tải lên đã hết hạn. Vui lòng thử lại.";
+    }
+    if (error.code === "STALE_DOCUMENT_VERSION") {
+      return "Phiên bản tài liệu đã thay đổi. Bản nháp của bạn được giữ nguyên; vui lòng tải lại để xem phiên bản mới.";
     }
     switch (error.status) {
       case 401:
@@ -121,6 +131,41 @@ export class CreditOpsApiClient implements CreditOpsApi {
           headers: { "Idempotency-Key": idempotencyKey },
           body: "{}",
         },
+      ),
+    );
+  }
+
+  async getDocumentReview(documentId: string): Promise<DocumentReviewDto> {
+    return parseDocumentReview(
+      await this.request(
+        `/api/v1/documents/${encodeURIComponent(documentId)}/review`,
+      ),
+    );
+  }
+
+  async confirmDocument(
+    documentId: string,
+    request: ConfirmDocumentRequestDto,
+  ): Promise<void> {
+    // Success is any 2xx; the confirmation response body is not consumed here.
+    await this.request(
+      `/api/v1/documents/${encodeURIComponent(documentId)}/confirmations`,
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  async listEvidence(caseId: string): Promise<EvidenceListDto> {
+    return parseEvidenceList(
+      await this.request(
+        `/api/v1/cases/${encodeURIComponent(caseId)}/evidence`,
+      ),
+    );
+  }
+
+  async listConflicts(caseId: string): Promise<ConflictListDto> {
+    return parseConflictList(
+      await this.request(
+        `/api/v1/cases/${encodeURIComponent(caseId)}/conflicts`,
       ),
     );
   }

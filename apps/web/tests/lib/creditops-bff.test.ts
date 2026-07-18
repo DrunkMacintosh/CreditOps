@@ -529,6 +529,186 @@ describe("CreditOps JSON BFF", () => {
   });
 });
 
+const CONFIRMATION_COOKIES = `${SESSION_COOKIE_NAME}=workforce-token; ${CSRF_COOKIE_NAME}=csrf-value`;
+
+function confirmationRequest(body: unknown) {
+  return request(
+    "/api/v1/documents/document-1/confirmations",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://app.invalid",
+        [CSRF_HEADER_NAME]: "csrf-value",
+      },
+      body: JSON.stringify(body),
+    },
+    CONFIRMATION_COOKIES,
+  );
+}
+
+const confirmationSegments = ["api", "v1", "documents", "document-1", "confirmations"];
+
+describe("CreditOps review-workspace routes", () => {
+  it.each([
+    ["/api/v1/documents/document-1/review", ["api", "v1", "documents", "document-1", "review"]],
+    ["/api/v1/cases/case-1/evidence", ["api", "v1", "cases", "case-1", "evidence"]],
+    ["/api/v1/cases/case-1/conflicts", ["api", "v1", "cases", "case-1", "conflicts"]],
+  ])("forwards the allowlisted review GET %s", async (path, segments) => {
+    const fetcher = vi.fn().mockResolvedValue(
+      Response.json({ items: [] }, { status: 200 }),
+    );
+    const response = await proxyCreditOpsRequest(request(path), segments, {
+      fetcher,
+      upstreamBaseUrl,
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0][0]).toBe(`https://creditops-api.invalid${path}`);
+  });
+
+  it.each([
+    ["/api/v1/documents/document-1/review?foo=bar", ["api", "v1", "documents", "document-1", "review"]],
+    ["/api/v1/cases/case-1/evidence?cursor=x", ["api", "v1", "cases", "case-1", "evidence"]],
+    ["/api/v1/cases/case-1/conflicts?limit=5", ["api", "v1", "cases", "case-1", "conflicts"]],
+  ])("rejects query parameters on the review GET %s", async (path, segments) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(request(path), segments, {
+      fetcher,
+      upstreamBaseUrl,
+    });
+
+    expect(response.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unlisted document sub-route closed", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/documents/document-1/preview"),
+      ["api", "v1", "documents", "document-1", "preview"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(404);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("forwards a valid confirmation body canonically", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      confirmationRequest({
+        expectedDocumentVersion: 3,
+        dispositions: [
+          { candidateId: "cand-1", disposition: "ACCEPTED" },
+          {
+            candidateId: "cand-2",
+            disposition: "CORRECTED",
+            correctedValue: "5000000000",
+            rationale: "Điều chỉnh theo hợp đồng tổng hợp",
+          },
+          { candidateId: "cand-3", disposition: "ABSENT" },
+        ],
+      }),
+      confirmationSegments,
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      "https://creditops-api.invalid/api/v1/documents/document-1/confirmations",
+    );
+    expect(fetcher.mock.calls[0][1].body).toBe(
+      JSON.stringify({
+        expectedDocumentVersion: 3,
+        dispositions: [
+          { candidateId: "cand-1", disposition: "ACCEPTED" },
+          {
+            candidateId: "cand-2",
+            disposition: "CORRECTED",
+            correctedValue: "5000000000",
+            rationale: "Điều chỉnh theo hợp đồng tổng hợp",
+          },
+          { candidateId: "cand-3", disposition: "ABSENT" },
+        ],
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "missing rationale on a corrected disposition",
+      body: {
+        expectedDocumentVersion: 1,
+        dispositions: [
+          { candidateId: "cand-1", disposition: "CORRECTED", correctedValue: "5000000000" },
+        ],
+      },
+    },
+    {
+      name: "extra top-level key",
+      body: {
+        expectedDocumentVersion: 1,
+        dispositions: [{ candidateId: "cand-1", disposition: "ACCEPTED" }],
+        extra: true,
+      },
+    },
+    {
+      name: "duplicate candidateId",
+      body: {
+        expectedDocumentVersion: 1,
+        dispositions: [
+          { candidateId: "cand-1", disposition: "ACCEPTED" },
+          { candidateId: "cand-1", disposition: "ABSENT" },
+        ],
+      },
+    },
+    {
+      name: "unknown disposition",
+      body: {
+        expectedDocumentVersion: 1,
+        dispositions: [{ candidateId: "cand-1", disposition: "APPROVED" }],
+      },
+    },
+    {
+      name: "non-corrected disposition carrying a corrected value",
+      body: {
+        expectedDocumentVersion: 1,
+        dispositions: [
+          { candidateId: "cand-1", disposition: "ACCEPTED", correctedValue: "5000000000" },
+        ],
+      },
+    },
+    {
+      name: "more than 200 dispositions",
+      body: {
+        expectedDocumentVersion: 1,
+        dispositions: Array.from({ length: 201 }, (_unused, index) => ({
+          candidateId: `cand-${index}`,
+          disposition: "ACCEPTED",
+        })),
+      },
+    },
+    {
+      name: "version below the accepted range",
+      body: {
+        expectedDocumentVersion: 0,
+        dispositions: [{ candidateId: "cand-1", disposition: "ACCEPTED" }],
+      },
+    },
+  ])("rejects an invalid confirmation body: $name", async ({ body }) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(confirmationRequest(body), confirmationSegments, {
+      fetcher,
+      upstreamBaseUrl,
+    });
+
+    expect(response.status).toBe(422);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
 describe("browser CreditOps client", () => {
   it("uses the same-origin BFF and adds the non-secret CSRF token to mutations", async () => {
     const fetcher = vi

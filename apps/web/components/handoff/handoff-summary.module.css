@@ -1,0 +1,74 @@
+.summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 1.75rem;
+  border: 1px solid #cbd4cf;
+  border-radius: 0.9rem;
+  background: #fff;
+}
+
+.boundary {
+  display: inline-block;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: #eef2ee;
+  color: #35614f;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.staleWarning {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 1rem 1.125rem;
+  border-left: 0.25rem solid #ba7d19;
+  border-radius: 0.4rem;
+  background: #fff7e8;
+  color: #503b18;
+}
+
+.staleWarning p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.staleBadge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: #ba7d19;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0;
+  width: 100%;
+}
+
+.counts div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.counts dt {
+  color: #58675f;
+  font-size: 0.8rem;
+}
+
+.counts dd {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+}

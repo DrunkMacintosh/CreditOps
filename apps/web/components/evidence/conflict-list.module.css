@@ -1,0 +1,87 @@
+.list {
+  display: grid;
+  gap: 1rem;
+  margin: 1.25rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conflict {
+  padding: 1.25rem 1.4rem;
+  border: 1px solid #cbd4cf;
+  border-radius: 0.9rem;
+  background: #fff;
+}
+
+.conflictStale {
+  border-color: #d9c69c;
+  background: #fffbf2;
+}
+
+.conflictHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.conflictHeader h3 {
+  margin: 0;
+  color: #172b24;
+  font-size: 1.05rem;
+}
+
+.sources {
+  display: grid;
+  gap: 0.6rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #e4e9e6;
+  border-radius: 0.6rem;
+  font-size: 0.86rem;
+}
+
+.sourceValue {
+  color: #172b24;
+  font-weight: 650;
+}
+
+.sourcePage {
+  color: #56665f;
+  font-size: 0.78rem;
+}
+
+.sourceRef {
+  margin-left: auto;
+  color: #78837e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+}
+
+.badgeStale {
+  display: inline-block;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  background: #f4dca0;
+  color: #6b4a10;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.note {
+  margin: 0.85rem 0 0;
+  color: #56665f;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}

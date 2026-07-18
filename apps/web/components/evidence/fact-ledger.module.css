@@ -1,0 +1,64 @@
+.section {
+  padding: 2rem;
+  border: 1px solid #cbd4cf;
+  border-radius: 0.9rem;
+  background: #fff;
+}
+
+.section p {
+  margin: 0;
+  color: #58675f;
+  line-height: 1.6;
+}
+
+.table {
+  width: 100%;
+  margin-bottom: 2.5rem;
+  border-collapse: collapse;
+}
+
+.table caption {
+  margin-bottom: 1rem;
+  color: #142b23;
+  font-size: 1.15rem;
+  font-weight: 750;
+  text-align: left;
+}
+
+.table th,
+.table td {
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid #e4e9e6;
+  font-size: 0.88rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.table thead th {
+  color: #56665f;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.table tbody th {
+  color: #172b24;
+  font-weight: 650;
+}
+
+.rowStale {
+  background: #fff7e8;
+}
+
+.badgeStale {
+  display: inline-block;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  background: #f4dca0;
+  color: #6b4a10;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

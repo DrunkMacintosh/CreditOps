@@ -17,6 +17,14 @@ const SAFE_RESPONSE_HEADERS = [
 ];
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FACT_DISPOSITIONS = new Set([
+  "ACCEPTED",
+  "CORRECTED",
+  "ABSENT",
+  "UNREADABLE",
+]);
+const MAX_DISPOSITIONS = 200;
+const MAX_DOCUMENT_VERSION = 1_000_000;
 const ACCEPTED_UPLOAD_TYPES = new Map([
   [".pdf", "application/pdf"],
   [".png", "image/png"],
@@ -343,7 +351,104 @@ function validateAndReconstructMutation(
     return hasExactKeys(value, []) ? {} : null;
   }
 
+  if (isConfirmationSubmission(segments)) {
+    return canonicalizeConfirmation(value);
+  }
+
   return null;
+}
+
+function isConfirmationSubmission(segments: string[]): boolean {
+  return (
+    segments.length === 5 &&
+    segments[0] === "api" &&
+    segments[1] === "v1" &&
+    segments[2] === "documents" &&
+    SAFE_ID.test(segments[3]) &&
+    segments[4] === "confirmations"
+  );
+}
+
+function canonicalizeConfirmation(
+  value: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!hasExactKeys(value, ["dispositions", "expectedDocumentVersion"])) {
+    return null;
+  }
+  const expectedDocumentVersion = value.expectedDocumentVersion;
+  if (
+    typeof expectedDocumentVersion !== "number" ||
+    !Number.isInteger(expectedDocumentVersion) ||
+    expectedDocumentVersion < 1 ||
+    expectedDocumentVersion > MAX_DOCUMENT_VERSION
+  ) {
+    return null;
+  }
+
+  const dispositions = value.dispositions;
+  if (
+    !Array.isArray(dispositions) ||
+    dispositions.length < 1 ||
+    dispositions.length > MAX_DISPOSITIONS
+  ) {
+    return null;
+  }
+
+  const seenCandidateIds = new Set<string>();
+  const canonicalDispositions: Record<string, unknown>[] = [];
+  for (const entry of dispositions) {
+    if (!isPlainRecord(entry)) return null;
+    const candidateId = entry.candidateId;
+    if (
+      typeof candidateId !== "string" ||
+      candidateId.length < 1 ||
+      candidateId.length > 64 ||
+      !SAFE_ID.test(candidateId)
+    ) {
+      return null;
+    }
+    if (seenCandidateIds.has(candidateId)) return null;
+    seenCandidateIds.add(candidateId);
+
+    const disposition = entry.disposition;
+    if (typeof disposition !== "string" || !FACT_DISPOSITIONS.has(disposition)) {
+      return null;
+    }
+
+    if (disposition === "CORRECTED") {
+      if (
+        !hasExactKeys(entry, [
+          "candidateId",
+          "correctedValue",
+          "disposition",
+          "rationale",
+        ])
+      ) {
+        return null;
+      }
+      const correctedValue = normalizedString(entry.correctedValue, 1, 500);
+      const rationale = normalizedString(entry.rationale, 1, 1000);
+      if (
+        correctedValue === null ||
+        looksLikeDocumentBytes(correctedValue) ||
+        rationale === null ||
+        looksLikeDocumentBytes(rationale)
+      ) {
+        return null;
+      }
+      canonicalDispositions.push({
+        candidateId,
+        disposition,
+        correctedValue,
+        rationale,
+      });
+    } else {
+      if (!hasExactKeys(entry, ["candidateId", "disposition"])) return null;
+      canonicalDispositions.push({ candidateId, disposition });
+    }
+  }
+
+  return { expectedDocumentVersion, dispositions: canonicalDispositions };
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -413,7 +518,11 @@ function allowlisted(method: string, segments: string[]): boolean {
     (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+$/.test(path)) ||
     (method === "POST" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/upload-intents$/.test(path)) ||
     (method === "POST" && /^\/api\/v1\/upload-intents\/[A-Za-z0-9_-]+\/complete$/.test(path)) ||
-    (method === "GET" && /^\/api\/v1\/tasks\/[A-Za-z0-9_-]+$/.test(path))
+    (method === "GET" && /^\/api\/v1\/tasks\/[A-Za-z0-9_-]+$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/documents\/[A-Za-z0-9_-]+\/review$/.test(path)) ||
+    (method === "POST" && /^\/api\/v1\/documents\/[A-Za-z0-9_-]+\/confirmations$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/evidence$/.test(path)) ||
+    (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+\/conflicts$/.test(path))
   );
 }
 

@@ -1,9 +1,18 @@
 import type {
   ApiErrorDto,
+  CandidateFactDto,
   CaseCapabilities,
   CompleteUploadResponseDto,
+  ConfirmedFactDto,
+  ConflictDto,
+  ConflictListDto,
+  ConflictSourceDto,
   CreditCaseListDto,
   CreditCaseDto,
+  DocumentReviewDto,
+  DocumentStage,
+  EvidenceListDto,
+  PageRegionDto,
   TaskStatus,
   TaskStatusDto,
   UploadIntentDto,
@@ -16,6 +25,16 @@ const TASK_STATUSES = new Set<TaskStatus>([
   "SUCCEEDED",
   "FAILED_MANUAL_REVIEW",
   "SUPERSEDED",
+]);
+
+const DOCUMENT_STAGES = new Set<DocumentStage>([
+  "REGISTERED",
+  "SECURITY_VALIDATED",
+  "PARSED",
+  "CLASSIFIED",
+  "EXTRACTED",
+  "INDEXED",
+  "READY_FOR_OFFICER_REVIEW",
 ]);
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -48,6 +67,46 @@ function boolean(value: unknown, label: string): boolean {
     throw new Error(`Phản hồi thiếu ${label} hợp lệ.`);
   }
   return value;
+}
+
+function booleanWithDefault(value: unknown, fallback: boolean, label: string): boolean {
+  if (value === undefined || value === null) return fallback;
+  return boolean(value, label);
+}
+
+function finiteNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Phản hồi thiếu ${label} hợp lệ.`);
+  }
+  return value;
+}
+
+function unitInterval(value: unknown, label: string): number {
+  const number = finiteNumber(value, label);
+  if (number < 0 || number > 1) {
+    throw new Error(`Phản hồi ${label} nằm ngoài khoảng cho phép.`);
+  }
+  return number;
+}
+
+function openUnitInterval(value: unknown, label: string): number {
+  const number = finiteNumber(value, label);
+  if (number <= 0 || number > 1) {
+    throw new Error(`Phản hồi ${label} nằm ngoài khoảng cho phép.`);
+  }
+  return number;
+}
+
+function nullablePositiveInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1
+    ? value
+    : null;
+}
+
+function factValue(value: unknown, label: string): string | number | boolean {
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw new Error(`Phản hồi ${label} không đúng định dạng.`);
 }
 
 function parseHeaders(value: unknown): Readonly<Record<string, string>> {
@@ -183,6 +242,123 @@ export function parseCompleteUpload(value: unknown): CompleteUploadResponseDto {
     };
   }
   throw new Error("Kết quả hoàn tất tải lên không được hỗ trợ.");
+}
+
+export function parsePageRegion(value: unknown): PageRegionDto {
+  const raw = record(value, "vùng tài liệu");
+  const page = positiveInteger(raw.page, "trang tài liệu");
+  const x = unitInterval(raw.x, "tọa độ x");
+  const y = unitInterval(raw.y, "tọa độ y");
+  const width = openUnitInterval(raw.width, "chiều rộng vùng");
+  const height = openUnitInterval(raw.height, "chiều cao vùng");
+  if (x + width > 1 || y + height > 1) {
+    throw new Error("Vùng tài liệu vượt quá kích thước trang chuẩn hóa.");
+  }
+  return { page, x, y, width, height };
+}
+
+export function parseCandidateFact(value: unknown): CandidateFactDto {
+  const raw = record(value, "chứng cứ đề xuất");
+  return {
+    id: string(raw.id, "id chứng cứ"),
+    caseId: string(raw.caseId, "id hồ sơ"),
+    caseVersion: positiveInteger(raw.caseVersion, "phiên bản hồ sơ"),
+    documentVersionId: string(raw.documentVersionId, "id phiên bản tài liệu"),
+    fieldKey: string(raw.fieldKey, "khóa trường thông tin"),
+    proposedValue: factValue(raw.proposedValue, "giá trị đề xuất"),
+    confidence: unitInterval(raw.confidence, "độ tin cậy"),
+    source: parsePageRegion(raw.source),
+  };
+}
+
+export function parseDocumentReview(value: unknown): DocumentReviewDto {
+  const raw = record(value, "phiên rà soát tài liệu");
+  const stage = string(raw.stage, "giai đoạn tài liệu") as DocumentStage;
+  if (!DOCUMENT_STAGES.has(stage)) {
+    throw new Error("Giai đoạn tài liệu không được hỗ trợ.");
+  }
+  const candidates = raw.candidates;
+  if (!Array.isArray(candidates)) {
+    throw new Error("Phản hồi danh sách chứng cứ không đúng định dạng.");
+  }
+  return {
+    documentId: string(raw.documentId, "id tài liệu"),
+    caseId: string(raw.caseId, "id hồ sơ"),
+    documentVersionId: string(raw.documentVersionId, "id phiên bản tài liệu"),
+    documentVersion: positiveInteger(
+      raw.documentVersion ?? raw.expectedDocumentVersion,
+      "phiên bản tài liệu",
+    ),
+    stage,
+    fileName: nullableString(raw.fileName),
+    pageCount: nullablePositiveInteger(raw.pageCount),
+    candidates: candidates.map(parseCandidateFact),
+  };
+}
+
+export function parseConfirmedFact(value: unknown): ConfirmedFactDto {
+  const raw = record(value, "chứng cứ đã xác nhận");
+  return {
+    id: string(raw.id, "id chứng cứ đã xác nhận"),
+    caseId: string(raw.caseId, "id hồ sơ"),
+    caseVersion: positiveInteger(raw.caseVersion, "phiên bản hồ sơ"),
+    candidateId: string(raw.candidateId, "id chứng cứ đề xuất"),
+    confirmationId: string(raw.confirmationId, "id xác nhận"),
+    documentVersionId: string(raw.documentVersionId, "id phiên bản tài liệu"),
+    fieldKey: string(raw.fieldKey, "khóa trường thông tin"),
+    value: factValue(raw.value, "giá trị đã xác nhận"),
+    candidateValue: factValue(raw.candidateValue, "giá trị đề xuất"),
+    source: parsePageRegion(raw.source),
+    confirmedAt: string(raw.confirmedAt, "thời điểm xác nhận"),
+    stale: booleanWithDefault(raw.stale, false, "cờ lỗi thời"),
+  };
+}
+
+export function parseEvidenceList(value: unknown): EvidenceListDto {
+  const raw = record(value, "danh sách chứng cứ");
+  const items = raw.items ?? raw.facts;
+  if (!Array.isArray(items)) {
+    throw new Error("Phản hồi danh sách chứng cứ không đúng định dạng.");
+  }
+  return { items: items.map(parseConfirmedFact) };
+}
+
+function parseConflictSource(value: unknown): ConflictSourceDto {
+  const raw = record(value, "nguồn xung đột");
+  return {
+    documentVersionId: string(raw.documentVersionId, "id phiên bản tài liệu"),
+    value: factValue(raw.value, "giá trị nguồn"),
+    source:
+      raw.source === undefined || raw.source === null
+        ? null
+        : parsePageRegion(raw.source),
+  };
+}
+
+export function parseConflict(value: unknown): ConflictDto {
+  const raw = record(value, "xung đột chứng cứ");
+  const sources = raw.sources;
+  if (!Array.isArray(sources) || sources.length < 2) {
+    throw new Error("Xung đột chứng cứ phải giữ lại từ hai nguồn trở lên.");
+  }
+  return {
+    id: string(raw.id, "id xung đột"),
+    caseId: string(raw.caseId, "id hồ sơ"),
+    caseVersion: positiveInteger(raw.caseVersion, "phiên bản hồ sơ"),
+    fieldKey: string(raw.fieldKey, "khóa trường thông tin"),
+    sources: sources.map(parseConflictSource),
+    detectedAt: nullableString(raw.detectedAt),
+    stale: booleanWithDefault(raw.stale, false, "cờ lỗi thời"),
+  };
+}
+
+export function parseConflictList(value: unknown): ConflictListDto {
+  const raw = record(value, "danh sách xung đột");
+  const items = raw.items;
+  if (!Array.isArray(items)) {
+    throw new Error("Phản hồi danh sách xung đột không đúng định dạng.");
+  }
+  return { items: items.map(parseConflict) };
 }
 
 function headerValue(

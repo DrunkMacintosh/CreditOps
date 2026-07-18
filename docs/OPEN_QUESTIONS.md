@@ -100,6 +100,18 @@ When a question is answered, move the confirmed outcome to [Decision Log](DECISI
 
 Retain a short pointer here if the history is useful.
 
+## Frontend intake review contracts (2026-07-18)
+
+Raised while consolidating the Task 11 review frontend (`apps/web`). The UI renders
+explicit contract-pending / fail-closed states wherever a canonical backend contract
+does not yet exist; these must be resolved when the Task 7–9 OpenAPI is published.
+
+- **OPEN QUESTION:** Task 9 endpoint paths (gaps list, explicit intake completion, current handoff, cursor-paginated audit) are unpublished; the frontend renders contract-pending states until canonical OpenAPI exists.
+- **OPEN QUESTION:** `rationale` on CORRECTED dispositions is required by the UI (plan Task 11) but absent from the domain `FactConfirmation`; the wire field is PROPOSED and must be reconciled with Task 8.
+- **OPEN QUESTION:** The exact conflict wire shape (sources/regions) is normalized in `apps/web/lib/api/schemas.ts` as a compatibility boundary pending the Task 8 OpenAPI; confirm the canonical shape.
+- **OPEN QUESTION:** No document page-image/preview URL contract exists for the source viewer; the viewer renders normalized-coordinate overlays on a placeholder page until a derived-artifact contract is published.
+- **OPEN QUESTION:** The canonical extraction field-key vocabulary and its Vietnamese labels (`apps/web/lib/review/field-labels.ts`) are pending the Task 7 document-family schemas; unknown keys currently render as their raw key.
+
 ## Related documents
 
 - [Project Context](PROJECT_CONTEXT.md)
