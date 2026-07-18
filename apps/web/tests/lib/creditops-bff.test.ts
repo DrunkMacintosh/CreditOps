@@ -1011,3 +1011,76 @@ describe("CreditOps gap-request / intake / handoff / audit routes", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+describe("CreditOps work-queue route", () => {
+  it("forwards the allowlisted work-items GET with no query", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ items: [] }, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/work-items"),
+      ["api", "v1", "work-items"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][0]).toBe("https://creditops-api.invalid/api/v1/work-items");
+  });
+
+  it("reconstructs the documented work-items limit query", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ items: [] }, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/work-items?limit=25"),
+      ["api", "v1", "work-items"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      "https://creditops-api.invalid/api/v1/work-items?limit=25",
+    );
+  });
+
+  it("accepts the backend's upper limit bound of 200", async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ items: [] }, { status: 200 }));
+    const response = await proxyCreditOpsRequest(
+      request("/api/v1/work-items?limit=200"),
+      ["api", "v1", "work-items"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      "https://creditops-api.invalid/api/v1/work-items?limit=200",
+    );
+  });
+
+  it.each([
+    "/api/v1/work-items?limit=0",
+    "/api/v1/work-items?limit=201",
+    "/api/v1/work-items?limit=20&limit=21",
+    "/api/v1/work-items?cursor=123e4567-e89b-12d3-a456-426614174000",
+    "/api/v1/work-items?foo=bar",
+    "/api/v1/work-items?documentBytes=JVBERi0%3D",
+  ])("rejects an undocumented or invalid work-items query: %s", async (path) => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      request(path),
+      ["api", "v1", "work-items"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps the work-items POST closed (read-only route)", async () => {
+    const fetcher = vi.fn();
+    const response = await proxyCreditOpsRequest(
+      jsonMutation("/api/v1/work-items", {}),
+      ["api", "v1", "work-items"],
+      { fetcher, upstreamBaseUrl },
+    );
+
+    expect(response.status).toBe(404);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});

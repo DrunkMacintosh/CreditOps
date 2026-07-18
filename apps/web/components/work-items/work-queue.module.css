@@ -1,0 +1,89 @@
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 1rem;
+}
+
+.group {
+  margin: 0 0 1.75rem;
+}
+
+.group:last-child {
+  margin-bottom: 0;
+}
+
+.groupHeading {
+  margin: 0 0 0.85rem;
+  color: var(--ink, #14261f);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  display: flex;
+  padding: 1.5rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+}
+
+.card > article {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 0.75rem;
+}
+
+.caseRef {
+  color: var(--ink-muted, #4f5f58);
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.title {
+  margin: 0;
+  color: var(--ink, #14261f);
+  font-size: 1.0625rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.reason {
+  margin: 0.5rem 0 0;
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  min-height: 2.8rem;
+  margin-top: auto;
+  padding-top: 1.25rem;
+}
+
+@media (max-width: 760px) {
+  .list {
+    grid-template-columns: 1fr;
+  }
+}

@@ -193,11 +193,17 @@ function validateAndReconstructSearch(
   segments: string[],
   parameters: URLSearchParams,
 ): string | null {
-  const entries = [...parameters.entries()];
-  if (!isCursorPaginatedListRoute(method, segments)) {
-    return entries.length === 0 ? "" : null;
+  if (isCursorPaginatedListRoute(method, segments)) {
+    return reconstructCursorLimitQuery(parameters);
   }
+  if (isLimitOnlyListRoute(method, segments)) {
+    return reconstructLimitOnlyQuery(parameters);
+  }
+  return [...parameters.entries()].length === 0 ? "" : null;
+}
 
+function reconstructCursorLimitQuery(parameters: URLSearchParams): string | null {
+  const entries = [...parameters.entries()];
   if (entries.some(([name]) => name !== "cursor" && name !== "limit")) {
     return null;
   }
@@ -217,6 +223,28 @@ function validateAndReconstructSearch(
   return query ? `?${query}` : "";
 }
 
+// The work-queue list route accepts only a bounded ``limit`` and no cursor.
+// Same reconstruct-from-scratch discipline as the cursor routes above: any
+// other parameter, a repeated ``limit``, or an out-of-range value fails closed.
+function reconstructLimitOnlyQuery(parameters: URLSearchParams): string | null {
+  const entries = [...parameters.entries()];
+  if (entries.some(([name]) => name !== "limit")) {
+    return null;
+  }
+  if (parameters.getAll("limit").length > 1) {
+    return null;
+  }
+  const limit = parameters.get("limit");
+  if (limit !== null && !validWorkItemsLimit(limit)) {
+    return null;
+  }
+
+  const canonical = new URLSearchParams();
+  if (limit !== null) canonical.set("limit", String(Number(limit)));
+  const query = canonical.toString();
+  return query ? `?${query}` : "";
+}
+
 // The only two GET routes that accept cursor pagination: the case list and the
 // per-case audit-event timeline. Both take the same {cursor?: UUID, limit?}
 // pair; every other route rejects any query string.
@@ -229,8 +257,20 @@ function isCursorPaginatedListRoute(method: string, segments: string[]): boolean
   );
 }
 
+// The work-queue list route (``GET /api/v1/work-items``) is limit-only.
+function isLimitOnlyListRoute(method: string, segments: string[]): boolean {
+  if (method !== "GET") return false;
+  return `/${segments.join("/")}` === "/api/v1/work-items";
+}
+
 function validLimit(value: string): boolean {
   return /^\d{1,3}$/.test(value) && Number(value) >= 1 && Number(value) <= 100;
+}
+
+// Mirrors the backend bound (work_items.py, Query(ge=1, le=200)); a value the
+// backend would itself reject never reaches it.
+function validWorkItemsLimit(value: string): boolean {
+  return /^\d{1,3}$/.test(value) && Number(value) >= 1 && Number(value) <= 200;
 }
 
 function isJsonMediaType(value: string): boolean {
@@ -693,6 +733,7 @@ function allowlisted(method: string, segments: string[]): boolean {
   if (segments.some((segment) => !SAFE_ID.test(segment))) return false;
   const path = `/${segments.join("/")}`;
   return (
+    (method === "GET" && path === "/api/v1/work-items") ||
     (method === "GET" && path === "/api/v1/cases") ||
     (method === "POST" && path === "/api/v1/cases") ||
     (method === "GET" && /^\/api\/v1\/cases\/[A-Za-z0-9_-]+$/.test(path)) ||
