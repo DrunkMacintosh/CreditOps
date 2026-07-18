@@ -64,6 +64,21 @@ class FakeOrchestrationRepository:
         self.outbox: list[OutboxEventRow] = []
         self.version_bumps: list[dict[str, object]] = []
         self.reissued_handoff_versions: list[int] = []
+        # The frozen intake evidence snapshot the intake handoff carries in its
+        # immutable ``handoff_data`` (the real adapter clones handoff_data
+        # forward).  Keyed by case version so a test can read the evidence view
+        # at any version.  Seeded at the current version when an intake handoff
+        # exists, mirroring a completed intake.
+        self.intake_evidence_by_version: dict[int, tuple[str, ...]] = {}
+        if has_intake_handoff:
+            self.intake_evidence_by_version[case_version] = (
+                "synthetic.monthly_income",
+                "synthetic.loan_amount",
+            )
+
+    def evidence_snapshot_at(self, version: int) -> tuple[str, ...]:
+        """The confirmed-fact snapshot the intake handoff carries at ``version``."""
+        return self.intake_evidence_by_version.get(version, ())
 
     def seed_task(
         self,
@@ -104,9 +119,16 @@ class FakeOrchestrationRepository:
         previous = self.case_version
         self.case_version += 1
         # Re-issue the intake handoff at the new version: the evidence base is
-        # unchanged, so G1 stays satisfied and the makers can rerun.
+        # unchanged, so G1 stays satisfied and the makers can rerun.  The real
+        # adapter's clone copies ``handoff_data`` (the frozen evidence snapshot)
+        # forward via INSERT..SELECT; mirror that carry so the evidence view at
+        # the new version is non-empty and identical to the old version's -- no
+        # evidence row is re-created.
         self.has_intake_handoff = True
         self.reissued_handoff_versions.append(self.case_version)
+        self.intake_evidence_by_version[self.case_version] = (
+            self.intake_evidence_by_version.get(previous, ())
+        )
         self.version_bumps.append(
             {
                 "case_id": case_id,
@@ -249,6 +271,13 @@ async def test_bump_writes_audit_reissues_handoff_and_kicks_off_revise_tick() ->
     assert bump["actor_id"] == OFFICER
     # The intake handoff is re-issued at the new version so G1 stays satisfied.
     assert repository.reissued_handoff_versions == [2]
+    # The re-issued handoff carries the frozen intake evidence snapshot forward,
+    # so the evidence view at the NEW version is non-empty and identical to the
+    # old version's (the adapter clones handoff_data || provenance; it re-creates
+    # no version-fenced evidence row).
+    assert repository.evidence_snapshot_at(1)  # non-empty baseline at v1
+    assert repository.evidence_snapshot_at(2) == repository.evidence_snapshot_at(1)
+    assert repository.evidence_snapshot_at(2)  # non-empty at the new version
     # A REVISE-keyed ORCHESTRATOR_PLAN task is created at the new version.
     assert result.plan_created is True
     revise_keys = [

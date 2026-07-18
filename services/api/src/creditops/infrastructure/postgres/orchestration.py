@@ -199,20 +199,35 @@ class PostgresOrchestrationRepository:
                 # current version, so without this clone G1 would be OPEN at the
                 # new version and NOTHING would schedule -- wrong for a revision
                 # loop whose evidence base is unchanged (only the analysis must
-                # redo).  A provenance note is merged into the immutable
-                # handoff_data.
+                # redo).  The clone preserves the original ``source_task_id`` and
+                # copies ``handoff_data`` forward (the frozen intake evidence
+                # snapshot), merging a revision-provenance note into the
+                # otherwise-immutable handoff_data -- the evidence did not change,
+                # so its provenance is carried, never fabricated.
                 #
-                # SCHEMA NOTE (failed-closed boundary): ``handoffs_task_case_fk``
-                # (migration 202607170006) binds ``(source_task_id, case_id,
-                # case_version)`` to ``processing_tasks``, and a DOCUMENT_INGESTION
-                # source task is itself version-scoped to a ``document_version``.
-                # The clone preserves the original ``source_task_id`` per the
-                # revision design; making this pass a live Postgres FK requires
-                # the intake evidence chain (ingestion task + document version)
-                # to be carried forward to the new version, which is out of this
-                # change's scope (it touches intake/underwriting adapters and
-                # migrations).  The single-transaction shape is proven by the
-                # contract test with a fake connection.
+                # SCHEMA NOTE (boundary CLOSED by migration 202607180026):
+                # ``handoffs_task_case_fk`` originally bound (source_task_id,
+                # case_id, case_version) to ``processing_tasks``, so this clone at
+                # the NEW version had no matching task and failed closed on a live
+                # Postgres.  Cloning the intake ingestion task forward instead is
+                # impossible, not merely out of scope: a DOCUMENT_INGESTION task is
+                # document-scoped (processing_tasks_document_scope) to a
+                # ``document_version`` whose identity is unique on (document_id,
+                # version) and (storage_bucket, storage_object_key) and immutable,
+                # and the whole evidence graph is version-fenced by design
+                # (version_integrity_test.sql; confirmed_facts are derived, never
+                # inserted at a foreign version).  A handoff is a workflow
+                # provenance pointer, not evidence, so 202607180026 version-
+                # decouples exactly that pointer -- (source_task_id, case_id),
+                # still case-fenced -- and this clone is now live-Postgres valid.
+                # No evidence row is cloned here; the live version-fenced evidence
+                # stays at its intake version by design.  (The maker's
+                # ``load_evidence_view`` reads confirmed_facts at the CURRENT
+                # case_version, so on a live DB it must read intake evidence at its
+                # provenance version -- an underwriting-adapter concern outside
+                # this method.)  The single-transaction shape is proven by the
+                # contract test with a fake connection; the live-FK soundness by
+                # supabase/tests/revision_carry_test.sql.
                 await connection.execute(
                     """
                     insert into public.handoffs (
@@ -545,6 +560,55 @@ class PostgresOrchestrationRepository:
                 from public.audit_events
                 where case_id = %s
                 {position_clause}
+                order by created_at desc, id desc
+                limit %s
+                """,
+                params,
+            )
+            rows = await result.fetchall()
+
+        records = tuple(_audit_event_from_row(row) for row in rows)
+        page = records[:limit]
+        next_cursor = page[-1].id if len(records) > limit else None
+        return page, next_cursor
+
+    async def list_audit_events_all(
+        self,
+        *,
+        cursor: UUID | None,
+        limit: int,
+        event_type: str | None = None,
+    ) -> tuple[tuple[AuditEventRow, ...], UUID | None]:
+        # Cross-case sibling of ``list_audit_events`` for the auditor surface
+        # (spec 17.3).  Identical keyset shape -- newest-first by (created_at,
+        # id) descending, cursor's own (created_at, id) resolved via a subselect
+        # in this SAME query, limit+1 next-page detection -- but UNSCOPED by
+        # case, so an auditor sees the whole-estate timeline.  The optional
+        # ``event_type`` is an exact-match filter validated at the API boundary.
+        filters: list[str] = []
+        params: list[object] = []
+        if event_type is not None:
+            filters.append("event_type = %s")
+            params.append(event_type)
+        if cursor is not None:
+            # The cursor row is resolved unscoped (the auditor spans all cases);
+            # an unknown/deleted id yields an empty position and thus no rows.
+            filters.append(
+                "(created_at, id) < (select created_at, id"
+                " from public.audit_events where id = %s)"
+            )
+            params.append(cursor)
+        where_clause = f"where {' and '.join(filters)}" if filters else ""
+        params.append(limit + 1)
+
+        async with self._connection_factory() as connection:
+            result = await connection.execute(
+                f"""
+                select id, case_id, case_version, event_type, actor_type,
+                       actor_id, artifact_type, artifact_id, event_data,
+                       created_at
+                from public.audit_events
+                {where_clause}
                 order by created_at desc, id desc
                 limit %s
                 """,

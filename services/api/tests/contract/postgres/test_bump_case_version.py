@@ -167,6 +167,23 @@ async def test_bump_is_one_transaction_with_optimistic_guard_audit_and_reissue()
     assert provenance["revisionProvenance"]["reissuedFromVersion"] == EXPECTED_VERSION
     assert provenance["revisionProvenance"]["dispositionRef"] == DISPOSITION_REF
 
+    # The clone SELECTs the original source_task_id forward unchanged (it does
+    # NOT re-point to a fabricated task).  Migration 202607180026 version-
+    # decouples handoffs_task_case_fk to (source_task_id, case_id) so this is a
+    # valid live-Postgres FK against the intake ingestion task recorded at the
+    # old version -- see supabase/tests/revision_carry_test.sql.
+    assert "select" in handoff_sql and "source_task_id, state" in handoff_sql
+
+    # The whole transaction is exactly bump + audit + handoff re-issue: NO
+    # evidence row is cloned.  The version-fenced intake evidence
+    # (document_versions / candidate_facts / confirmed_facts) stays at its intake
+    # version by design; what carries forward is the handoff's frozen snapshot.
+    full_sql = _sql(connection)
+    assert "insert into public.confirmed_facts" not in full_sql
+    assert "insert into public.document_versions" not in full_sql
+    assert "insert into public.candidate_facts" not in full_sql
+    assert "insert into public.processing_tasks" not in full_sql
+
 
 @pytest.mark.asyncio
 async def test_stale_expected_version_raises_and_writes_nothing_else() -> None:

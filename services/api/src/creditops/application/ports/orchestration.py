@@ -211,3 +211,21 @@ class OrchestrationRepository(Protocol):
     async def list_audit_events(
         self, case_id: UUID, *, cursor: UUID | None, limit: int
     ) -> tuple[tuple[AuditEventRow, ...], UUID | None]: ...
+
+    async def list_audit_events_all(
+        self,
+        *,
+        cursor: UUID | None,
+        limit: int,
+        event_type: str | None = None,
+    ) -> tuple[tuple[AuditEventRow, ...], UUID | None]:
+        """Cross-case audit timeline (the read-only auditor surface, spec 17.3).
+
+        The unscoped sibling of ``list_audit_events``: SAME keyset pagination
+        contract (newest-first by ``(created_at, id)``, ``limit + 1`` next-page
+        detection, cursor position resolved via a subselect in the SAME query),
+        but NOT scoped to a single case -- it spans every case.  ``event_type``,
+        when given, is an exact-match filter (its shape is validated at the API
+        boundary against a conservative regex).  Read-only: it appends nothing.
+        """
+        ...
