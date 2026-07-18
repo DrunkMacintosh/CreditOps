@@ -17,6 +17,7 @@ from creditops.api.conditions import router as conditions_router
 from creditops.api.contract_packages import router as contract_packages_router
 from creditops.api.credit_decisions import router as credit_decisions_router
 from creditops.api.credit_ops import router as credit_ops_router
+from creditops.api.disbursements import router as disbursements_router
 from creditops.api.errors import (
     ApiException,
     api_exception_handler,
@@ -28,11 +29,14 @@ from creditops.api.financing import router as financing_router
 from creditops.api.gap_requests import router as gap_requests_router
 from creditops.api.intake import router as intake_router
 from creditops.api.legal import router as legal_router
+from creditops.api.monitoring import router as monitoring_router
 from creditops.api.notifications import router as notifications_router
 from creditops.api.orchestration import router as orchestration_router
 from creditops.api.prospects import router as prospects_router
+from creditops.api.repayments import router as repayments_router
 from creditops.api.risk_review import router as risk_review_router
 from creditops.api.security_interests import router as security_interests_router
+from creditops.api.settlement_recovery import router as settlement_recovery_router
 from creditops.api.tasks import router as tasks_router
 from creditops.api.underwriting import router as underwriting_router
 from creditops.api.uploads import router as uploads_router
@@ -42,6 +46,9 @@ from creditops.application.unit_of_work import UnitOfWorkFactory
 from creditops.config import Settings
 from creditops.infrastructure.gcp.cloud_run_dispatcher import CloudRunDispatcher
 from creditops.infrastructure.gcp.metadata_token import MetadataTokenProvider
+from creditops.infrastructure.mock.disbursement_adapter import (
+    MockDisbursementExecutionAdapter,
+)
 from creditops.infrastructure.postgres.conditions import (
     PostgresConditionLedgerRepository,
 )
@@ -52,6 +59,9 @@ from creditops.infrastructure.postgres.credit_decisions import (
     PostgresCreditDecisionRepository,
 )
 from creditops.infrastructure.postgres.credit_ops import PostgresCreditOpsRepository
+from creditops.infrastructure.postgres.disbursements import (
+    PostgresDisbursementRepository,
+)
 from creditops.infrastructure.postgres.evidence_review import (
     PostgresEvidenceReviewRepository,
 )
@@ -61,6 +71,9 @@ from creditops.infrastructure.postgres.gap_request_batches import (
 )
 from creditops.infrastructure.postgres.intake import PostgresIntakeRepository
 from creditops.infrastructure.postgres.legal import PostgresLegalRepository
+from creditops.infrastructure.postgres.monitoring import (
+    PostgresMonitoringRepository,
+)
 from creditops.infrastructure.postgres.notifications import (
     PostgresNotificationRepository,
 )
@@ -68,12 +81,18 @@ from creditops.infrastructure.postgres.orchestration import (
     PostgresOrchestrationRepository,
 )
 from creditops.infrastructure.postgres.prospects import PostgresProspectRepository
+from creditops.infrastructure.postgres.repayments import (
+    PostgresRepaymentLedgerRepository,
+)
 from creditops.infrastructure.postgres.repositories import PostgresUnitOfWorkFactory
 from creditops.infrastructure.postgres.risk_review import PostgresRiskReviewRepository
 from creditops.infrastructure.postgres.security_interests import (
     PostgresSecurityInterestRepository,
 )
 from creditops.infrastructure.postgres.session import PsycopgConnectionFactory
+from creditops.infrastructure.postgres.settlement_recovery import (
+    PostgresSettlementRecoveryRepository,
+)
 from creditops.infrastructure.postgres.tasks import PostgresTaskRepository
 from creditops.infrastructure.postgres.underwriting import (
     PostgresUnderwritingRepository,
@@ -237,6 +256,33 @@ def create_app(
         if database_connection_factory is not None
         else None
     )
+    application.state.disbursement_repository = (
+        PostgresDisbursementRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
+    # Labelled synthetic mock: no real core-banking execution exists or is
+    # authorized in the current scope.
+    application.state.disbursement_execution_adapter = (
+        MockDisbursementExecutionAdapter()
+        if database_connection_factory is not None
+        else None
+    )
+    application.state.monitoring_repository = (
+        PostgresMonitoringRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
+    application.state.repayment_ledger_repository = (
+        PostgresRepaymentLedgerRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
+    application.state.settlement_recovery_repository = (
+        PostgresSettlementRecoveryRepository(database_connection_factory)
+        if database_connection_factory is not None
+        else None
+    )
     application.state.worker_dispatcher = (
         CloudRunDispatcher(
             project_id=cast(str, configured.gcp_project_id),
@@ -295,6 +341,10 @@ def create_app(
     application.include_router(conditions_router)
     application.include_router(security_interests_router)
     application.include_router(contract_packages_router)
+    application.include_router(disbursements_router)
+    application.include_router(monitoring_router)
+    application.include_router(repayments_router)
+    application.include_router(settlement_recovery_router)
     return application
 
 

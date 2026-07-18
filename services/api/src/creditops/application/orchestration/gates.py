@@ -126,6 +126,27 @@ ALL_GATES: tuple[GateType, ...] = (
     GateType.HG_CONTRACT_PACKAGE_APPROVED,
     GateType.HG_SIGNATURE_AUTHORITY_CONFIRMED,
     GateType.HG_CONTRACTS_SIGNED,
+    # Stage 11 (master design section 5 giai đoạn 11): the two SEPARATE
+    # disbursement human gates -- validation then authorization -- which MUST be
+    # satisfied by DIFFERENT actors (maker-checker / authority split).  Each takes
+    # the SAME stored-status-only, default-OPEN path below as the other HG_ gates:
+    # the engine never satisfies them; only authorized humans (api/disbursements.py
+    # validate / authorize) can, and the mock execution adapter runs ONLY after
+    # BOTH are SATISFIED.  Intentionally NOT a required_gate on any task-graph node
+    # (application/orchestration/graph.py); PROPOSED synthetic gate names, no
+    # official SHB mapping.
+    GateType.HG_DISBURSEMENT_VALIDATED,
+    GateType.HG_DISBURSEMENT_AUTHORIZED,
+    # Stage 14 (master design section 5 giai đoạn 14): the settlement-confirmation
+    # gate and the recovery-strategy-approval gate.  Each takes the SAME
+    # stored-status-only, default-OPEN path below as the other HG_ gates -- the
+    # engine never satisfies them; only an authorized human (api/
+    # settlement_recovery.py confirm / approve-strategy) can, and the recovery gate
+    # requires a DIFFERENT actor than the escalator.  Intentionally NOT a
+    # required_gate on any task-graph node (application/orchestration/graph.py);
+    # PROPOSED synthetic gate names, no official SHB mapping.
+    GateType.HG_SETTLEMENT_CONFIRMED,
+    GateType.HG_RECOVERY_STRATEGY_APPROVED,
 )
 
 
