@@ -80,8 +80,12 @@ select throws_ok(
 
 -- The redundant flat-key FK from fact_confirmations is gone; the ACTIVE-
 -- assignment trigger remains the (stronger) enforcement layer.
-select hasnt_fk(
-  'public', 'fact_confirmations', 'fact_confirmations_assignment_fk',
+select ok(
+  not exists (
+    select 1 from pg_constraint
+    where conname = 'fact_confirmations_assignment_fk'
+      and conrelid = 'public.fact_confirmations'::regclass
+  ),
   'the flat-assignment FK was dropped with the flat unique key'
 );
 

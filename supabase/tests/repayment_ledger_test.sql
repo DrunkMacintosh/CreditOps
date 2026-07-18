@@ -104,14 +104,14 @@ insert into public.repayment_events (
   id, facility_id, kind, amount, external_reference, effective_date
 )
 values (
-  'ev000000-0000-0000-0000-0000000000f1',
+  'e0000000-0000-0000-0000-0000000000f1',
   'fac00000-0000-0000-0000-0000000000f3',
   'PAYMENT', '41200.00', 'BANKREF-0001', '2026-08-01'
 );
 
 select is(
   (select kind from public.repayment_events
-   where id = 'ev000000-0000-0000-0000-0000000000f1'),
+   where id = 'e0000000-0000-0000-0000-0000000000f1'),
   'PAYMENT',
   'a repayment payment event persists'
 );
@@ -162,7 +162,7 @@ select throws_ok(
     ) values (
       'fac00000-0000-0000-0000-0000000000f3',
       'PAYMENT', '5.00', 'BANKREF-BADREF', '2026-08-02',
-      'ev000000-0000-0000-0000-0000000000f1'
+      'e0000000-0000-0000-0000-0000000000f1'
     )$$,
   '23514',
   null,
@@ -189,7 +189,7 @@ insert into public.repayment_events (
 values (
   'fac00000-0000-0000-0000-0000000000f3',
   'REVERSAL', '41200.00', 'BANKREF-REV-0001', '2026-08-03',
-  'ev000000-0000-0000-0000-0000000000f1'
+  'e0000000-0000-0000-0000-0000000000f1'
 );
 
 select is(
@@ -203,7 +203,7 @@ select is(
 -- 12-13. Repayment events are append-only.
 select throws_ok(
   $$update public.repayment_events set amount = '1.00'
-      where id = 'ev000000-0000-0000-0000-0000000000f1'$$,
+      where id = 'e0000000-0000-0000-0000-0000000000f1'$$,
   '42501',
   null,
   'repayment events are append-only (no update)'
@@ -211,7 +211,7 @@ select throws_ok(
 
 select throws_ok(
   $$delete from public.repayment_events
-      where id = 'ev000000-0000-0000-0000-0000000000f1'$$,
+      where id = 'e0000000-0000-0000-0000-0000000000f1'$$,
   '42501',
   null,
   'repayment events are append-only (no delete)'

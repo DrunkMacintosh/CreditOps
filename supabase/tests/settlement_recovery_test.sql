@@ -13,7 +13,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions, pgmq, pg_catalog;
 
-select plan(29);
+select plan(28);
 
 insert into public.credit_cases (id, case_version, workflow_state, created_by)
 values (

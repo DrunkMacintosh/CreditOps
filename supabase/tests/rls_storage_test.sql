@@ -35,7 +35,8 @@ insert into public.upload_intents (
   accepted_content_type,
   size_ceiling,
   declared_size_bytes,
-  expires_at
+  expires_at,
+  created_at
 )
 values
   (
@@ -49,7 +50,8 @@ values
     'application/pdf',
     1048576,
     1048576,
-    clock_timestamp() + interval '5 minutes'
+    clock_timestamp() + interval '5 minutes',
+    clock_timestamp()
   ),
   (
     '20000000-0000-0000-0000-000000000002',
@@ -62,7 +64,8 @@ values
     'application/pdf',
     1048576,
     1048576,
-    clock_timestamp() - interval '1 minute'
+    clock_timestamp() - interval '1 minute',
+    clock_timestamp() - interval '10 minutes'
   ),
   (
     '20000000-0000-0000-0000-000000000003',
@@ -75,7 +78,8 @@ values
     'application/pdf',
     1048576,
     1048576,
-    clock_timestamp() + interval '5 minutes'
+    clock_timestamp() + interval '5 minutes',
+    clock_timestamp()
   );
 
 select is(

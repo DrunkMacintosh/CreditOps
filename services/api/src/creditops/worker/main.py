@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from creditops.application.credit_ops.assembler import RunMemoInference
 from creditops.application.credit_ops.processor import CreditOperationsProcessor
+from creditops.application.governance import all_goal_contracts
 from creditops.application.legal.processor import LegalComplianceProcessor
 from creditops.application.legal.reviewer import RunLegalInference
 from creditops.application.orchestration.advance import AdvanceCase
@@ -60,6 +61,7 @@ from creditops.infrastructure.postgres.credit_ops import PostgresCreditOpsReposi
 from creditops.infrastructure.postgres.document_ingestion import (
     PostgresDocumentIngestionRepository,
 )
+from creditops.infrastructure.postgres.governance import PostgresGovernanceRepository
 from creditops.infrastructure.postgres.legal import PostgresLegalRepository
 from creditops.infrastructure.postgres.orchestration import (
     PostgresOrchestrationRepository,
@@ -89,6 +91,10 @@ class WorkerRuntime:
     registry: ProcessorRegistry
     orchestration: PostgresOrchestrationRepository
     agent_queue: SupabaseQueue
+    #: The append-only governance store wired into the four specialist
+    #: processors: it persists each call's context manifest and seeds the
+    #: committed goal-contract registry.
+    governance: PostgresGovernanceRepository
     #: Whether a benchmark-passed FPT route was activated for this runtime.
     inference_enabled: bool
 
@@ -133,6 +139,7 @@ def build_runtime(
     )
     tasks = PostgresTaskRepository(connection_factory)
     orchestration = PostgresOrchestrationRepository(connection_factory)
+    governance = PostgresGovernanceRepository(connection_factory)
     agent_queue = SupabaseQueue(connection_factory, queue_name=AGENT_TASK_QUEUE_NAME)
     document_queue = SupabaseQueue(connection_factory)
 
@@ -166,10 +173,12 @@ def build_runtime(
         TaskType.CREDIT_UNDERWRITING: CreditUnderwritingProcessor(
             PostgresUnderwritingRepository(connection_factory),
             RunUnderwritingInference(reasoning) if reasoning is not None else None,
+            governance=governance,
         ),
         TaskType.LEGAL_COMPLIANCE_COLLATERAL: LegalComplianceProcessor(
             PostgresLegalRepository(connection_factory),
             RunLegalInference(reasoning) if reasoning is not None else None,
+            governance=governance,
             # Labelled synthetic mock: no real KYC/AML/registry integration
             # exists or is authorized in the current scope.
             controlled_checks_gateway=MockControlledChecksGateway(),
@@ -177,10 +186,12 @@ def build_runtime(
         TaskType.INDEPENDENT_RISK_REVIEW: IndependentRiskReviewProcessor(
             PostgresRiskReviewRepository(connection_factory),
             RunCheckerInference(reasoning) if reasoning is not None else None,
+            governance=governance,
         ),
         TaskType.CREDIT_OPERATIONS: CreditOperationsProcessor(
             PostgresCreditOpsRepository(connection_factory),
             RunMemoInference(reasoning) if reasoning is not None else None,
+            governance=governance,
         ),
     }
     registry = ProcessorRegistry(
@@ -194,8 +205,32 @@ def build_runtime(
         registry=registry,
         orchestration=orchestration,
         agent_queue=agent_queue,
+        governance=governance,
         inference_enabled=reasoning is not None,
     )
+
+
+async def ensure_goal_contracts_best_effort(
+    governance: PostgresGovernanceRepository,
+) -> None:
+    """Seed the committed goal-contract registry once, best-effort.
+
+    The seed is idempotent on ``(contract_key, version)``; a failure is logged
+    and swallowed so a governance-store hiccup never blocks task processing
+    (the manifests reference contracts by their stable deterministic id
+    regardless of whether the seed row is present yet).
+    """
+
+    try:
+        await governance.ensure_goal_contract_rows(all_goal_contracts())
+    except Exception:
+        log_event(
+            _logger,
+            logging.WARNING,
+            "Goal-contract seed failed; task processing continues and the seed "
+            "will be retried on the next worker run",
+            {"event": "goal_contract_seed_failed"},
+        )
 
 
 async def maybe_retick_after_success(
@@ -261,6 +296,32 @@ async def run_once(
     return result
 
 
+async def _run_worker(
+    *,
+    tasks: TaskRepository,
+    queue: QueuePort,
+    processor: TaskProcessor | TaskProcessorRegistry,
+    orchestration: object | None,
+    agent_queue: QueuePort | None,
+    governance: PostgresGovernanceRepository | None,
+) -> WorkerRunResult:
+    """Seed the committed goal contracts once (best-effort), then run one task.
+
+    The seed shares the run's event loop so the composition root stays purely
+    synchronous (and DB-free for tests that construct it directly).
+    """
+
+    if governance is not None:
+        await ensure_goal_contracts_best_effort(governance)
+    return await run_once(
+        tasks=tasks,
+        queue=queue,
+        processor=processor,
+        orchestration=orchestration,
+        agent_queue=agent_queue,
+    )
+
+
 def main(
     *,
     tasks: TaskRepository | None = None,
@@ -274,6 +335,7 @@ def main(
     )
     orchestration: object | None = None
     agent_queue: QueuePort | None = None
+    governance: PostgresGovernanceRepository | None = None
     if tasks is None and queue is None and processor is None:
         runtime = build_runtime(settings)
         if runtime is not None:
@@ -291,15 +353,17 @@ def main(
             tasks, queue, processor = runtime.tasks, runtime.queue, runtime.registry
             orchestration = runtime.orchestration
             agent_queue = runtime.agent_queue
+            governance = runtime.governance
 
     if tasks is not None and queue is not None and processor is not None:
         result = asyncio.run(
-            run_once(
+            _run_worker(
                 tasks=tasks,
                 queue=queue,
                 processor=processor,
                 orchestration=orchestration,
                 agent_queue=agent_queue,
+                governance=governance,
             )
         )
         if result.outcome in {

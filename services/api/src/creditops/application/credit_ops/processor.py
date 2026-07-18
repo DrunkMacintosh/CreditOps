@@ -43,7 +43,15 @@ from creditops.application.credit_ops.assembler import (
     persist_credit_ops_package,
     target_universe_for,
 )
-from creditops.application.ports.credit_ops import CreditOpsRepository, PersistedCreditOpsOutput
+from creditops.application.governance import governance_for, manifest_from_governance
+from creditops.application.ports.credit_ops import (
+    ChallengeDispositionSummary,
+    CreditOpsRepository,
+    CreditOpsUpstreamView,
+    OpenGapRecord,
+    PersistedCreditOpsOutput,
+)
+from creditops.application.ports.governance import GovernanceRepository
 from creditops.application.ports.model_gateway import InferenceError, InferenceUnavailableError
 from creditops.application.ports.orchestration import OrchestrationAuditEvent
 from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
@@ -53,11 +61,17 @@ from creditops.application.use_cases.run_worker_once import (
     WorkerOutcome,
 )
 from creditops.domain.credit_ops import CREDIT_OPS_AGENT_ROLE, CreditOpsPackage
+from creditops.domain.goal_contracts import UNIVERSAL_PROHIBITED_ACTIONS
+from creditops.domain.orchestration import TaskType
 
 CHECKPOINT_EVIDENCE = "EVIDENCE_VIEW_BUILT"
 CHECKPOINT_DETERMINISTIC_PACKAGE = "DETERMINISTIC_PACKAGE_COMPUTED"
 CHECKPOINT_MEMO_DRAFTED = "MEMO_DRAFTED"
 CHECKPOINT_PERSISTED = "PACKAGE_PERSISTED"
+
+#: The service identity under which the worker acts when it builds a context
+#: manifest (see the underwriting processor for the rationale).
+_SERVICE_IDENTITY = "service:agent-worker"
 
 
 class CreditOperationsProcessor:
@@ -68,11 +82,20 @@ class CreditOperationsProcessor:
         repository: CreditOpsRepository,
         inference: RunMemoInference | None,
         *,
+        governance: GovernanceRepository | None = None,
         clock: Callable[[], datetime] | None = None,
         execution_id_factory: Callable[[], UUID] | None = None,
     ) -> None:
         self._repository = repository
         self._inference = inference
+        self._governance = governance
+        # The committed goal contract bounding this task type (fetched
+        # unconditionally so the universal human-only bans are enforced at
+        # construction; see the underwriting processor).
+        self._governance_profile = governance_for(TaskType.CREDIT_OPERATIONS)
+        assert UNIVERSAL_PROHIBITED_ACTIONS.issubset(
+            self._governance_profile.goal_contract.prohibited_actions
+        ), "credit-ops goal contract must restate every universal prohibited action"
         self._clock = clock or (lambda: datetime.now(UTC))
         self._execution_id_factory = execution_id_factory or uuid4
 
@@ -166,6 +189,12 @@ class CreditOperationsProcessor:
             },
         )
 
+        # Governance: snapshot exactly what this credit-ops call is authorized
+        # to see (upstream handoffs, open gaps and human challenge dispositions)
+        # BEFORE inference; idempotent per (task, contextHash) and reached only
+        # on the fresh pre-inference path.
+        await self._persist_context_manifest(task, view, open_gaps, dispositions)
+
         universe = target_universe_for(view)
         run = AssemblerRunContext(
             task_id=task.id,
@@ -226,6 +255,56 @@ class CreditOperationsProcessor:
             },
         )
         return StageResult()
+
+    async def _persist_context_manifest(
+        self,
+        task: TaskRecord,
+        view: CreditOpsUpstreamView,
+        open_gaps: tuple[OpenGapRecord, ...],
+        dispositions: tuple[ChallengeDispositionSummary, ...],
+    ) -> None:
+        """Build and persist this credit-ops call's context manifest (no-op
+        without a wired governance repository)."""
+
+        if self._governance is None:
+            return
+        upstream_refs = tuple(
+            handoff_id
+            for handoff_id in (
+                view.intake_handoff_id,
+                view.underwriting_handoff_id,
+                view.legal_handoff_id,
+                view.risk_review_handoff_id,
+            )
+            if handoff_id is not None
+        )
+        human_decision_refs = tuple(
+            disposition.challenge_id
+            for disposition in dispositions
+            if disposition.challenge_id is not None
+        )
+        manifest = manifest_from_governance(
+            self._governance_profile,
+            case_id=task.case_id,
+            case_version=task.case_version,
+            task_id=task.id,
+            actor_or_service_identity=_SERVICE_IDENTITY,
+            case_roles=(CREDIT_OPS_AGENT_ROLE,),
+            upstream_artifact_refs=upstream_refs,
+            open_gap_refs=tuple(gap.gap_id for gap in open_gaps),
+            human_decision_refs=human_decision_refs,
+        )
+        persisted = await self._governance.persist_manifest(manifest)
+        await self._audit(
+            task,
+            "CREDIT_OPS_CONTEXT_MANIFEST_PERSISTED",
+            {
+                "contextManifestId": str(persisted.manifest_id),
+                "contextHash": persisted.context_hash,
+                "goalContractKey": self._governance_profile.contract_key,
+                "goalContractVersion": self._governance_profile.goal_contract.version,
+            },
+        )
 
     @staticmethod
     def _handoff_id_for(package: CreditOpsPackage) -> UUID:

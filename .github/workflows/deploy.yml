@@ -25,6 +25,9 @@ env:
   GAR_REPOSITORY: ${{ vars.GAR_REPOSITORY }}
   CLOUD_RUN_API_SERVICE: ${{ vars.CLOUD_RUN_API_SERVICE }}
   CLOUD_RUN_WORKER_JOB: ${{ vars.CLOUD_RUN_WORKER_JOB }}
+  # Optional second worker Job that drains the agent queue (WORKER_MODE=agent).
+  # Leave unset to roll only the document-queue Job.
+  CLOUD_RUN_WORKER_JOB_AGENT: ${{ vars.CLOUD_RUN_WORKER_JOB_AGENT }}
   SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
   VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
   VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
@@ -158,24 +161,111 @@ jobs:
           --no-allow-unauthenticated
           --quiet
 
-      - name: Update worker job only when the runtime gate is enabled
+      # Runtime coordinates for the synthetic demonstration, derived from
+      # repository vars/secrets so populating Google Secret Manager is not a
+      # deploy prerequisite.  Secret VALUES land in the service's env
+      # configuration (visible to GCP project viewers) — an accepted
+      # trade-off for the synthetic-only demo; migrate to Secret Manager /
+      # api_secret_refs beyond it (docs/DEPLOYMENT_RUNBOOK.md).  Optional
+      # pairs (OIDC_*, FPT endpoints, service-role key) are skipped while
+      # unset and the application keeps failing closed without them.
+      - name: Apply runtime environment to API service
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FPT_API_KEY: ${{ secrets.FPT_API_KEY }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
+          OIDC_AUDIENCE: ${{ vars.OIDC_AUDIENCE }}
+          OIDC_JWKS_URL: ${{ vars.OIDC_JWKS_URL }}
+          FPT_REASONING_ENDPOINT_URL: ${{ vars.FPT_REASONING_ENDPOINT_URL }}
+          FPT_REASONING_ENDPOINT_ID: ${{ vars.FPT_REASONING_ENDPOINT_ID }}
+          FPT_VISION_ENDPOINT_URL: ${{ vars.FPT_VISION_ENDPOINT_URL }}
+          FPT_VISION_ENDPOINT_ID: ${{ vars.FPT_VISION_ENDPOINT_ID }}
+          FPT_EMBEDDING_ENDPOINT_URL: ${{ vars.FPT_EMBEDDING_ENDPOINT_URL }}
+          FPT_EMBEDDING_ENDPOINT_ID: ${{ vars.FPT_EMBEDDING_ENDPOINT_ID }}
+        run: |
+          set -euo pipefail
+          pw_enc="$(python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')"
+          pairs="DATABASE_URL=postgresql://postgres:${pw_enc}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres?sslmode=require"
+          pairs="${pairs}|SUPABASE_URL=https://${SUPABASE_PROJECT_REF}.supabase.co"
+          pairs="${pairs}|GCP_PROJECT_ID=${GCP_PROJECT_ID}"
+          pairs="${pairs}|GCP_LOCATION=${GCP_REGION}"
+          pairs="${pairs}|GCP_WORKER_JOB_NAME=${CLOUD_RUN_WORKER_JOB}"
+          pairs="${pairs}|APP_ENV=development"
+          for key in SUPABASE_SERVICE_ROLE_KEY FPT_API_KEY OIDC_ISSUER \
+            OIDC_AUDIENCE OIDC_JWKS_URL FPT_REASONING_ENDPOINT_URL \
+            FPT_REASONING_ENDPOINT_ID FPT_VISION_ENDPOINT_URL \
+            FPT_VISION_ENDPOINT_ID FPT_EMBEDDING_ENDPOINT_URL \
+            FPT_EMBEDDING_ENDPOINT_ID; do
+            value="${!key:-}"
+            if [ -n "$value" ]; then
+              pairs="${pairs}|${key}=${value}"
+            fi
+          done
+          gcloud run services update "$CLOUD_RUN_API_SERVICE" \
+            --project="$GCP_PROJECT_ID" \
+            --region="$GCP_REGION" \
+            --update-env-vars="^|^${pairs}" \
+            --quiet
+
+      # Each worker Job drains exactly ONE queue and refuses to run (exit 78)
+      # unless WORKER_MODE is set to "document" or "agent" — see
+      # services/api/src/creditops/worker/main.py (build_runtime returns None,
+      # then main() raises SystemExit(78)) and config.py (worker_mode has no
+      # default: fail closed). Neither Terraform (deploy/terraform/modules/
+      # cloud_run) nor Secret Manager set WORKER_MODE, so this workflow pins it
+      # per Job with --update-env-vars, which MERGES: the Terraform-managed env
+      # (APP_ENV, DATA_CLASS, SERVICE_NAME) and the worker_secret_refs (
+      # DATABASE_URL, SUPABASE_*, FPT_*, ...) are preserved and no credential
+      # ever passes through this workflow.
+      #
+      # There are TWO queues — creditops_document_tasks and
+      # creditops_agent_tasks — so full processing needs TWO Jobs. Only the
+      # primary Job is provisioned today: Terraform creates a single
+      # "creditops-worker" Job and BOTH of its triggers target that one Job —
+      # the API dispatcher (config gcp_worker_job_name) and the per-minute
+      # recovery sweep (deploy/terraform/modules/scheduler, schedule
+      # "* * * * *", gated by worker_runtime_ready). CLOUD_RUN_WORKER_JOB is
+      # that Job; it is rolled as WORKER_MODE=document (the ingestion entry
+      # stage).
+      #
+      # The agent Job is an OPTIONAL extension. CLOUD_RUN_WORKER_JOB_AGENT is
+      # NOT yet in the Terraform module or docs/DEPLOYMENT_SECRETS.md; before
+      # setting it, a SECOND Cloud Run Job must exist AND have its own
+      # dispatcher target and its own per-minute recovery scheduler (both live
+      # in Terraform / the API, not in this workflow). Left unset, roll_worker
+      # skips it and only the document queue drains.
+      - name: Roll worker Jobs only when the runtime gate is enabled
         if: vars.WORKER_RUNTIME_READY == 'true'
         env:
           IMAGE: ${{ steps.immutable-image.outputs.image }}
-        run: >-
-          gcloud run jobs update "$CLOUD_RUN_WORKER_JOB"
-          --project="$GCP_PROJECT_ID"
-          --region="$GCP_REGION"
-          --image="$IMAGE"
-          --args=worker
-          --tasks=1
-          --parallelism=1
-          --max-retries=0
-          --quiet
+        run: |
+          set -euo pipefail
+          roll_worker() {
+            job="$1"
+            mode="$2"
+            if [ -z "$job" ]; then
+              echo "No Job configured for WORKER_MODE=${mode}; skipping." >&2
+              return 0
+            fi
+            gcloud run jobs update "$job" \
+              --project="$GCP_PROJECT_ID" \
+              --region="$GCP_REGION" \
+              --image="$IMAGE" \
+              --args=worker \
+              --update-env-vars="WORKER_MODE=${mode}" \
+              --tasks=1 \
+              --parallelism=1 \
+              --max-retries=0 \
+              --quiet
+          }
+          roll_worker "$CLOUD_RUN_WORKER_JOB" document
+          roll_worker "$CLOUD_RUN_WORKER_JOB_AGENT" agent
 
       - name: Confirm worker remains fail-closed
         if: vars.WORKER_RUNTIME_READY != 'true'
-        run: echo "WORKER_RUNTIME_READY is false; worker job was not changed."
+        run: echo "WORKER_RUNTIME_READY is false; worker Jobs were not changed."
 
   vercel:
     name: Deploy Vercel frontend

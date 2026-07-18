@@ -169,7 +169,8 @@ select is(
 select throws_ok(
   $$insert into public.policy_corpus_versions (
       corpus_id, version, checksum_sha256
-    ) values ('SHB-SYNTHETIC-POLICY-CORPUS', 'v1', 'not-a-checksum')$$,
+    ) values ('SHB-SYNTHETIC-POLICY-CORPUS', 'v1',
+              '2bad8a80bf0b2352569bbe7e29cf6af46426c3e7a366da7d901e26c3b61cdede')$$,
   '23505',
   null,
   'a corpus version is registered at most once per (corpus_id, version)'

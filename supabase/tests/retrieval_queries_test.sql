@@ -69,6 +69,20 @@ values (
   'Doanh thu thuan nam 2025 (du lieu mo phong).', 'SYNTHETIC_TEST'
 );
 
+-- A second passage so the composite-scope FK test below binds a fresh
+-- (query, passage) pair and is not masked by the one-hit-per-passage unique.
+insert into public.retrieval_passages (
+  id, case_id, case_version, document_version_id, page_region_id,
+  passage_text, extraction_method
+)
+values (
+  '63000000-0000-0000-0000-0000000000f2',
+  '10000000-0000-0000-0000-0000000000f1', 1,
+  '61000000-0000-0000-0000-0000000000f1',
+  '62000000-0000-0000-0000-0000000000f1',
+  'Loi nhuan sau thue nam 2025 (du lieu mo phong).', 'SYNTHETIC_TEST'
+);
+
 -- 1. A retrieval query persists with typed seed refs and scope filters.
 insert into public.retrieval_queries (
   id, case_id, case_version, task_id, query_text_vi, seed_node_refs, filters
@@ -139,7 +153,7 @@ values (
   '10000000-0000-0000-0000-0000000000f1', 1,
   '63000000-0000-0000-0000-0000000000f1', 1,
   0.42, 0.87,
-  'ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+  repeat('c', 64)
 );
 
 select is(
@@ -156,7 +170,7 @@ select throws_ok(
       '70000000-0000-0000-0000-0000000000f1',
       '10000000-0000-0000-0000-0000000000f1', 1,
       '63000000-0000-0000-0000-0000000000f1', 2, 0.1,
-      'ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+      repeat('c', 64)
     )$$,
   '23505',
   null,
@@ -193,13 +207,15 @@ select throws_ok(
 );
 
 -- 9. A hit cannot point at a query in a different case scope (composite FK).
+--    Uses the second passage so the one-hit-per-passage unique does not fire
+--    first — the composite scope FK is what must reject case_version 2.
 select throws_ok(
   $$insert into public.retrieval_hits (
       query_id, case_id, case_version, passage_id, rank, lexical_score, passage_hash
     ) values (
       '70000000-0000-0000-0000-0000000000f1',
       '10000000-0000-0000-0000-0000000000f1', 2,
-      '63000000-0000-0000-0000-0000000000f1', 5, 0.1,
+      '63000000-0000-0000-0000-0000000000f2', 5, 0.1,
       'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
     )$$,
   '23503',

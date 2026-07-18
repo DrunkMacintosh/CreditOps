@@ -83,7 +83,7 @@ select throws_ok(
       max_attempts, input_payload, idempotency_key
     ) values (
       '10000000-0000-0000-0000-000000000001', 2,
-      '61000000-0000-0000-0000-000000000001', 'SYNTHETIC_TEST',
+      '61000000-0000-0000-0000-000000000001', 'DOCUMENT_INGESTION',
       1, '{}'::jsonb, 'cross-version-task'
     )
   $$,
@@ -99,7 +99,7 @@ insert into public.processing_tasks (
 values (
   '40000000-0000-0000-0000-000000000001',
   '10000000-0000-0000-0000-000000000001', 1,
-  '61000000-0000-0000-0000-000000000001', 'SYNTHETIC_TEST',
+  '61000000-0000-0000-0000-000000000001', 'DOCUMENT_INGESTION',
   1, '{}'::jsonb, 'same-version-task'
 );
 

@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import pytest
 from jsonschema import Draft202012Validator
 
+from creditops.application.governance import goal_contract_for
 from creditops.application.legal.corpus import PolicyCorpus, load_corpus
 from creditops.application.legal.processor import (
     CHECKPOINT_INFERENCE,
@@ -25,6 +26,7 @@ from creditops.application.legal.processor import (
 )
 from creditops.application.legal.reviewer import LegalPrompt, RunLegalInference
 from creditops.application.orchestration.processors import ProcessorRegistry
+from creditops.application.ports.governance import PersistedManifest
 from creditops.application.ports.legal import (
     ControlledCheckResult,
     LegalEvidenceView,
@@ -40,6 +42,7 @@ from creditops.application.ports.model_gateway import (
 from creditops.application.ports.orchestration import OrchestrationAuditEvent
 from creditops.application.ports.queue import TaskCheckpoint, TaskRecord
 from creditops.domain.enums import TaskStatus
+from creditops.domain.goal_contracts import ContextManifest, compute_context_hash
 from creditops.domain.legal import LegalComplianceAssessment
 from creditops.domain.orchestration import TaskType
 from creditops.infrastructure.mock.legal_checks import MockControlledChecksGateway
@@ -323,10 +326,33 @@ class CheckpointRecorder:
         return [checkpoint.checkpoint_type for checkpoint in self.saved]
 
 
+class FakeGovernanceRepository:
+    """Dedupes context manifests per (task, contextHash), like the durable
+    partial unique index; records every persist call."""
+
+    def __init__(self) -> None:
+        self.persist_calls: list[ContextManifest] = []
+        self.manifests: dict[tuple[UUID | None, str], UUID] = {}
+
+    async def persist_manifest(self, manifest: ContextManifest) -> PersistedManifest:
+        self.persist_calls.append(manifest)
+        context_hash = compute_context_hash(manifest)
+        key = (manifest.task_id, context_hash)
+        existing = self.manifests.get(key)
+        if existing is not None:
+            return PersistedManifest(existing, context_hash, created=False)
+        self.manifests[key] = manifest.id
+        return PersistedManifest(manifest.id, context_hash, created=True)
+
+    async def ensure_goal_contract_rows(self, contracts: object) -> None:
+        del contracts
+
+
 def build_processor(
     repository: LegalRepository,
     gateway: FakeGateway | None,
     *,
+    governance: FakeGovernanceRepository | None = None,
     corpus_loader: Callable[[], PolicyCorpus | None] = lambda: _CORPUS,
 ) -> LegalComplianceProcessor:
     inference = (
@@ -337,6 +363,7 @@ def build_processor(
     return LegalComplianceProcessor(
         repository,
         inference,
+        governance=governance,
         controlled_checks_gateway=MockControlledChecksGateway(clock=lambda: NOW),
         clock=lambda: NOW,
         corpus_loader=corpus_loader,
@@ -527,6 +554,80 @@ async def test_fabricated_controlled_check_invocation_id_is_rejected() -> None:
 
     assert result.status.value == "RETRY_WAIT"
     assert repository.persist_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_context_manifest_persisted_before_inference_from_registry_contract() -> None:
+    view = make_view()
+    governance = FakeGovernanceRepository()
+    repository = FakeLegalRepository(view)
+    processor = build_processor(repository, FakeGateway(), governance=governance)
+
+    result = await processor.process(legal_task(), None, CheckpointRecorder().save)
+
+    assert result.status.value == "SUCCEEDED"
+    assert len(governance.persist_calls) == 1
+    (manifest,) = governance.persist_calls
+    contract = goal_contract_for(TaskType.LEGAL_COMPLIANCE_COLLATERAL)
+    assert manifest.goal_contract_id == contract.id
+    assert set(manifest.authoritative_fact_refs) == {
+        fact.confirmed_fact_id for fact in view.confirmed_facts
+    }
+    # The controlled-check invocations the reviewer was fed are recorded as
+    # tool-result refs (deterministic mock KYC/AML/related-party).
+    assert manifest.tool_result_refs
+    assert processor._governance_profile.goal_contract == contract
+    assert any(
+        event.event_type == "LEGAL_CONTEXT_MANIFEST_PERSISTED"
+        for event in repository.audit_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_manifest_persisted_even_when_inference_unavailable() -> None:
+    governance = FakeGovernanceRepository()
+    repository = FakeLegalRepository(make_view())
+    processor = build_processor(repository, UnavailableGateway(), governance=governance)
+
+    result = await processor.process(legal_task(), None, CheckpointRecorder().save)
+
+    assert result.status.value == "FAILED_MANUAL_REVIEW"
+    assert len(governance.manifests) == 1
+    assert repository.assessments == {}
+
+
+@pytest.mark.asyncio
+async def test_no_manifest_persisted_without_a_gateway() -> None:
+    governance = FakeGovernanceRepository()
+    processor = build_processor(
+        FakeLegalRepository(make_view()), None, governance=governance
+    )
+
+    result = await processor.process(legal_task(), None, CheckpointRecorder().save)
+
+    assert result.status.value == "FAILED_MANUAL_REVIEW"
+    assert governance.persist_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resume_from_inference_checkpoint_persists_no_new_manifest() -> None:
+    view = make_view()
+    governance = FakeGovernanceRepository()
+    processor = build_processor(FakeLegalRepository(view), FakeGateway(), governance=governance)
+    recorder = CheckpointRecorder()
+    await processor.process(legal_task(), None, recorder.save)
+    inference_checkpoint = next(
+        c for c in recorder.saved if c.checkpoint_type == CHECKPOINT_INFERENCE
+    )
+    assert len(governance.persist_calls) == 1
+
+    resumed_governance = FakeGovernanceRepository()
+    resumed = build_processor(
+        FakeLegalRepository(view), AssertNoCallGateway(), governance=resumed_governance
+    )
+    await resumed.process(legal_task(), inference_checkpoint, CheckpointRecorder().save)
+
+    assert resumed_governance.persist_calls == []
 
 
 def test_response_schema_is_closed_and_decision_free() -> None:

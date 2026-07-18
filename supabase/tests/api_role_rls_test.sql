@@ -5,6 +5,14 @@ set local search_path = public, extensions, pg_catalog;
 
 select plan(22);
 
+-- pgTAP is installed in the extensions schema.  The custom creditops_api role
+-- (unlike the Supabase-managed authenticated/anon roles) is not granted USAGE
+-- there, so once we SET ROLE creditops_api below, pgTAP assertion functions
+-- (is/lives_ok/throws_ok) would be unresolvable ("function does not exist").
+-- Grant USAGE for this test transaction only (rolled back with the tx); it does
+-- not alter the production role and does not affect the RLS behaviour under test.
+grant usage on schema extensions to creditops_api;
+
 select is(
   (select rolbypassrls from pg_roles where rolname = 'creditops_api'),
   false,
@@ -233,5 +241,6 @@ select is(
   'revocation hides audit events'
 );
 
+reset role;
 select * from finish();
 rollback;

@@ -44,13 +44,14 @@ values (
 -- 1. A proposed disbursement action persists (defaults to PROPOSED).
 insert into public.proposed_disbursement_actions (
   id, case_id, case_version, decision_id, amount_text, currency,
-  beneficiary_ref_vi, account_ref_vi
+  beneficiary_ref_vi, account_ref_vi, created_by
 )
 values (
   'a0000000-0000-0000-0000-0000000000f1',
   '10000000-0000-0000-0000-0000000000f1', 1,
   'd0000000-0000-0000-0000-0000000000f1',
-  '5000000000', 'VND', 'Nha cung cap (mo phong)', 'TK-BENEFICIARY-DEMO'
+  '5000000000', 'VND', 'Nha cung cap (mo phong)', 'TK-BENEFICIARY-DEMO',
+  '00000000-0000-0000-0000-000000000001'
 );
 
 select is(
@@ -64,11 +65,11 @@ select is(
 select throws_ok(
   $$insert into public.proposed_disbursement_actions (
       case_id, case_version, decision_id, amount_text, currency,
-      beneficiary_ref_vi, account_ref_vi, status
+      beneficiary_ref_vi, account_ref_vi, status, created_by
     ) values (
       '10000000-0000-0000-0000-0000000000f1', 1,
       'd0000000-0000-0000-0000-0000000000f1', '1', 'VND', 'b', 'a',
-      'EXECUTED_BY_AGENT'
+      'EXECUTED_BY_AGENT', '00000000-0000-0000-0000-000000000001'
     )$$,
   '23514',
   null,
@@ -79,10 +80,11 @@ select throws_ok(
 select throws_ok(
   $$insert into public.proposed_disbursement_actions (
       case_id, case_version, decision_id, amount_text, currency,
-      beneficiary_ref_vi, account_ref_vi
+      beneficiary_ref_vi, account_ref_vi, created_by
     ) values (
       '10000000-0000-0000-0000-0000000000f1', 1,
-      'd0000000-0000-0000-0000-0000000000f1', 'abc', 'VND', 'b', 'a'
+      'd0000000-0000-0000-0000-0000000000f1', 'abc', 'VND', 'b', 'a',
+      '00000000-0000-0000-0000-000000000001'
     )$$,
   '23514',
   null,
@@ -93,10 +95,11 @@ select throws_ok(
 select throws_ok(
   $$insert into public.proposed_disbursement_actions (
       case_id, case_version, decision_id, amount_text, currency,
-      beneficiary_ref_vi, account_ref_vi
+      beneficiary_ref_vi, account_ref_vi, created_by
     ) values (
       '10000000-0000-0000-0000-0000000000f1', 1,
-      'd0000000-0000-0000-0000-0000000000f1', '1', '   ', 'b', 'a'
+      'd0000000-0000-0000-0000-0000000000f1', '1', '   ', 'b', 'a',
+      '00000000-0000-0000-0000-000000000001'
     )$$,
   '23514',
   null,
@@ -108,10 +111,11 @@ select throws_ok(
 select throws_ok(
   $$insert into public.proposed_disbursement_actions (
       case_id, case_version, decision_id, amount_text, currency,
-      beneficiary_ref_vi, account_ref_vi
+      beneficiary_ref_vi, account_ref_vi, created_by
     ) values (
       '10000000-0000-0000-0000-0000000000f1', 2,
-      'd0000000-0000-0000-0000-0000000000f1', '1', 'VND', 'b', 'a'
+      'd0000000-0000-0000-0000-0000000000f1', '1', 'VND', 'b', 'a',
+      '00000000-0000-0000-0000-000000000001'
     )$$,
   '23503',
   null,
@@ -264,10 +268,11 @@ select is(
 select throws_ok(
   $$insert into public.proposed_disbursement_actions (
       case_id, case_version, decision_id, amount_text, currency,
-      beneficiary_ref_vi, account_ref_vi
+      beneficiary_ref_vi, account_ref_vi, created_by
     ) values (
       '10000000-0000-0000-0000-0000000000f1', 1,
-      'd0000000-0000-0000-0000-0000000000f1', '1', 'VND', 'b', 'a'
+      'd0000000-0000-0000-0000-0000000000f1', '1', 'VND', 'b', 'a',
+      '00000000-0000-0000-0000-000000000001'
     )$$,
   '42501',
   null,
