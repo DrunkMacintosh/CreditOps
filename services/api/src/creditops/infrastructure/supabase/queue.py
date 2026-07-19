@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from psycopg.types.json import Jsonb
@@ -85,12 +85,15 @@ class SupabaseQueue(QueuePort):
             or visibility_timeout_seconds > 86_400
         ):
             raise QueueError("queue visibility extension is outside the bounded contract")
-        # PGMQ set_vt takes an absolute timestamp; do not interpolate untrusted
-        # values into SQL.  The queue name is validated in the constructor.
-        visible_at = datetime.now(UTC) + timedelta(seconds=visibility_timeout_seconds)
+        # Live pgmq's set_vt signature is (queue_name text, msg_id bigint,
+        # vt integer) where vt is a RELATIVE OFFSET IN SECONDS -- not an
+        # absolute timestamp.  Passing a timestamptz raised UndefinedFunction
+        # on every heartbeat, failing every claimed task before its processor
+        # ran (live 2026-07-19).  The explicit casts also pin msg_id to bigint
+        # so psycopg's small-int inference can never change the resolution.
         row = await self._fetchone(
-            "select pgmq.set_vt(%s, %s, %s)",
-            (self._queue_name, message_id, visible_at),
+            "select pgmq.set_vt(%s::text, %s::bigint, %s::integer)",
+            (self._queue_name, message_id, visibility_timeout_seconds),
         )
         if row is not None and row[0] is False:
             raise QueueError("PGMQ visibility extension was rejected")
@@ -99,7 +102,7 @@ class SupabaseQueue(QueuePort):
         if message_id <= 0:
             raise QueueError("queue message identifier is invalid")
         row = await self._fetchone(
-            "select pgmq.archive(%s, %s)",
+            "select pgmq.archive(%s::text, %s::bigint)",
             (self._queue_name, message_id),
         )
         if row is not None and row[0] is False:
