@@ -730,55 +730,275 @@ textarea {
   letter-spacing: 0.01em;
 }
 
-.case-nav-groups {
+/* Timeline rail: five phase nodes on a hairline. The rail fills leaf-green
+   through completed phases; hover/focus a phase to unfold its steps. */
+.case-timeline {
   display: flex;
-  flex-wrap: wrap;
-  gap: 1.1rem 2.25rem;
-}
-
-.case-nav-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-}
-
-.case-nav-group-label {
-  color: var(--leaf, #35614f);
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.case-nav-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 0.35rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.case-nav-tab {
-  display: inline-block;
-  padding: 0.32rem 0.55rem 0.42rem;
-  border-bottom: 2px solid transparent;
+.case-phase {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Rail segment from this node toward the next; the last phase draws none. */
+.case-phase:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 0.36rem;
+  left: 1.35rem;
+  right: 0.55rem;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line, #c9d0cb);
+}
+
+.case-phase.is-past:not(:last-child)::before {
+  background: var(--leaf, #35614f);
+}
+
+.case-phase-head {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.55rem;
+  text-decoration: none;
+}
+
+.case-phase-node {
+  box-sizing: border-box;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--line, #c9d0cb);
+  border-radius: 50%;
+  background: var(--card, #ffffff);
+  transition: transform 0.12s ease;
+}
+
+.case-phase.is-past .case-phase-node {
+  border-color: var(--leaf, #35614f);
+  background: var(--leaf, #35614f);
+}
+
+.case-phase.is-active .case-phase-node {
+  border-color: var(--deep, #102c22);
+  background: var(--deep, #102c22);
+  box-shadow:
+    0 0 0 2px var(--card, #ffffff),
+    0 0 0 4px var(--amber, #ba7d19);
+}
+
+.case-phase-head:hover .case-phase-node {
+  transform: scale(1.2);
+}
+
+.case-phase-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding-right: 0.75rem;
+}
+
+.case-phase-index {
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--leaf, #35614f);
+}
+
+.case-phase.is-ahead .case-phase-index {
+  color: var(--ink-muted, #4f5f58);
+}
+
+.case-phase-label {
   color: var(--ink-muted, #4f5f58);
   font-size: 0.85rem;
   font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
+  line-height: 1.3;
 }
 
-a.case-nav-tab:hover {
+.case-phase-head:hover .case-phase-label {
   color: var(--ink, #14261f);
-  border-bottom-color: var(--line, #c9d0cb);
 }
 
-.case-nav-tab.is-current {
+.case-phase.is-past .case-phase-label {
+  color: var(--ink, #14261f);
+}
+
+.case-phase.is-active .case-phase-label {
   color: var(--deep, #102c22);
   font-weight: 700;
-  border-bottom-color: var(--deep, #102c22);
+}
+
+/* Where you are inside the active phase, in the desk's callout language. */
+.case-phase-current-step {
+  display: inline-block;
+  margin-top: 0.45rem;
+  padding: 0.2rem 0.55rem 0.24rem;
+  border-left: 3px solid var(--amber, #ba7d19);
+  border-radius: 0 0.35rem 0.35rem 0;
+  background: var(--amber-soft, #fff7e8);
+  color: var(--deep, #102c22);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* The steps of a phase, unfolded on hover or keyboard focus. The wrapper's
+   top padding bridges the pointer gap between node and card. */
+.case-phase-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 40;
+  min-width: 13.5rem;
+  padding-top: 0.45rem;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-0.25rem);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    visibility 0.14s;
+}
+
+.case-phase:nth-last-child(-n + 2) .case-phase-popover {
+  left: auto;
+  right: 0;
+}
+
+.case-phase:hover .case-phase-popover,
+.case-phase:focus-within .case-phase-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.case-phase-popover-card {
+  padding: 0.4rem;
+  border: 1px solid var(--line, #c9d0cb);
+  border-radius: var(--radius, 0.75rem);
+  background: var(--card, #ffffff);
+  box-shadow: 0 10px 24px rgba(16, 44, 34, 0.14);
+}
+
+.case-phase-popover-title {
+  display: block;
+  padding: 0.3rem 0.6rem 0.35rem;
+  font-family: var(--font-mono, "IBM Plex Mono", ui-monospace, monospace);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted, #4f5f58);
+}
+
+.case-phase-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.case-phase-step {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm, 0.5rem);
+  color: var(--ink-muted, #4f5f58);
+  font-size: 0.83rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+a.case-phase-step:hover {
+  background: var(--canvas, #f4f5f3);
+  color: var(--ink, #14261f);
+}
+
+.case-phase-step.is-current {
+  background: var(--amber-soft, #fff7e8);
+  box-shadow: inset 3px 0 0 var(--amber, #ba7d19);
+  color: var(--deep, #102c22);
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .case-phase-node,
+  .case-phase-popover {
+    transition: none;
+  }
+
+  .case-phase-head:hover .case-phase-node {
+    transform: none;
+  }
+}
+
+/* Narrow viewports have no hover: the rail turns vertical and every phase
+   keeps its steps unfolded in place. */
+@media (max-width: 760px) {
+  .case-timeline {
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .case-phase {
+    padding-left: 1.65rem;
+  }
+
+  .case-phase:not(:last-child)::before {
+    top: 0.95rem;
+    bottom: -0.5rem;
+    left: 0.36rem;
+    right: auto;
+    width: 2px;
+    height: auto;
+  }
+
+  .case-phase-head {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 0;
+  }
+
+  .case-phase-node {
+    position: absolute;
+    left: 0;
+    top: 0.1rem;
+  }
+
+  .case-phase-current-step {
+    display: none;
+  }
+
+  .case-phase-popover {
+    position: static;
+    min-width: 0;
+    padding-top: 0.1rem;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
+
+  .case-phase-popover-card {
+    padding: 0 0 0.6rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .case-phase-popover-title {
+    display: none;
+  }
+
+  .case-phase-step {
+    padding: 0.3rem 0.4rem;
+  }
 }
 
 .section-heading {

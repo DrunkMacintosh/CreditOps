@@ -24,7 +24,7 @@ export type CaseSection =
 
 // `tai-lieu` (per-document review) has no tab of its own: it is reached from the
 // intake section, so it is intentionally absent from the groups below. When it is
-// the current section no tab is marked, which mirrors the earlier behaviour.
+// the current section no phase is marked, which mirrors the earlier behaviour.
 type NavTab = { section: Exclude<CaseSection, "tai-lieu">; label: string };
 
 const CASE_NAV_GROUPS: readonly { label: string; tabs: readonly NavTab[] }[] = [
@@ -80,6 +80,10 @@ export function CaseNav({
   caseId: string;
   current?: CaseSection;
 }) {
+  const activeGroupIndex = CASE_NAV_GROUPS.findIndex((group) =>
+    group.tabs.some((tab) => tab.section === current),
+  );
+
   return (
     <nav aria-label="Điều hướng hồ sơ" className="case-nav">
       <div className="case-nav-top">
@@ -88,30 +92,64 @@ export function CaseNav({
         </Link>
         <span className="case-reference">Mã: {shortReference(caseId)}</span>
       </div>
-      <div className="case-nav-groups">
-        {CASE_NAV_GROUPS.map((group) => (
-          <div className="case-nav-group" key={group.label}>
-            <span className="case-nav-group-label">{group.label}</span>
-            <ul className="case-nav-tabs">
-              {group.tabs.map(({ section, label }) =>
-                section === current ? (
-                  <li key={section}>
-                    <span aria-current="page" className="case-nav-tab is-current">
-                      {label}
-                    </span>
-                  </li>
-                ) : (
-                  <li key={section}>
-                    <Link className="case-nav-tab" href={`/ho-so/${caseId}/${section}`}>
-                      {label}
-                    </Link>
-                  </li>
-                ),
-              )}
-            </ul>
-          </div>
-        ))}
-      </div>
+      <ol className="case-timeline">
+        {CASE_NAV_GROUPS.map((group, index) => {
+          const state =
+            activeGroupIndex === -1 || index > activeGroupIndex
+              ? "is-ahead"
+              : index === activeGroupIndex
+                ? "is-active"
+                : "is-past";
+          const currentTab = group.tabs.find((tab) => tab.section === current);
+          const phaseIndex = String(index + 1).padStart(2, "0");
+          return (
+            <li className={`case-phase ${state}`} key={group.label}>
+              <Link
+                className="case-phase-head"
+                href={`/ho-so/${caseId}/${group.tabs[0].section}`}
+              >
+                <span aria-hidden="true" className="case-phase-node" />
+                <span className="case-phase-name">
+                  <span aria-hidden="true" className="case-phase-index">
+                    {phaseIndex}
+                  </span>
+                  <span className="case-phase-label">{group.label}</span>
+                </span>
+              </Link>
+              {currentTab ? (
+                <span className="case-phase-current-step">{currentTab.label}</span>
+              ) : null}
+              <div className="case-phase-popover">
+                <div className="case-phase-popover-card">
+                  <span aria-hidden="true" className="case-phase-popover-title">
+                    {phaseIndex} · {group.label}
+                  </span>
+                  <ul className="case-phase-steps">
+                    {group.tabs.map(({ section, label }) =>
+                      section === current ? (
+                        <li key={section}>
+                          <span aria-current="page" className="case-phase-step is-current">
+                            {label}
+                          </span>
+                        </li>
+                      ) : (
+                        <li key={section}>
+                          <Link
+                            className="case-phase-step"
+                            href={`/ho-so/${caseId}/${section}`}
+                          >
+                            {label}
+                          </Link>
+                        </li>
+                      ),
+                    )}
+                  </ul>
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </nav>
   );
 }
