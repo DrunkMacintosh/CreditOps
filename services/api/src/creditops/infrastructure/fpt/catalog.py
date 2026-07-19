@@ -175,6 +175,14 @@ def _capabilities_from_environment(
                 )
             continue
 
+        if not endpoint and not endpoint_id and not env_model:
+            # Pinned in code but not provisioned in THIS environment (no endpoint
+            # url, id, or model override at all): the route is simply not deployed
+            # here.  Skip it so it stays DISABLED on its own -- fail closed per
+            # capability -- instead of disabling every other configured route.
+            # A PARTIAL configuration still fails loudly below.
+            continue
+
         if env_model is not None and env_model.strip() and env_model.strip() != pinned_model:
             raise ValueError(
                 f"FPT {capability} model id is pinned in code; the environment "

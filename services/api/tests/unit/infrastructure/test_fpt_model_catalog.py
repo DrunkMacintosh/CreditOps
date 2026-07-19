@@ -100,11 +100,49 @@ def test_environment_may_restate_the_same_code_model() -> None:
     assert catalog.config_for("reasoning").model_id == "qwen3-benchmark-selected"
 
 
-def test_pinned_model_without_endpoint_fails_closed() -> None:
+def test_unprovisioned_pinned_capability_is_skipped_not_fatal() -> None:
+    # The shipped catalog pins reasoning+vision+embedding, but a deployment may
+    # only provision reasoning.  vision/embedding being unconfigured must NOT
+    # disable the fully-configured, benchmark-passed reasoning route (live
+    # 2026-07-19: "incomplete FPT vision configuration" had taken reasoning down
+    # with it, so the worker ran with inference DISABLED).
+    catalog = FPTCatalog.from_configuration(
+        model_catalog={
+            "reasoning": "qwen3-benchmark-selected",
+            "vision": "some-vision-model",
+            "embedding": "some-embedding-model",
+        },
+        environ={"FPT_API_KEY": "secret-key", **_endpoint_env("FPT_REASONING")},
+        benchmark_records=(_pass_record(),),
+    )
+    assert set(catalog.capabilities) == {"reasoning"}
+    assert catalog.config_for("reasoning").model_id == "qwen3-benchmark-selected"
+    with pytest.raises(ValueError):
+        catalog.config_for("vision")
+
+
+def test_pinned_model_without_any_endpoint_is_skipped_and_fails_closed() -> None:
+    # No endpoint provisioned at all -> the route is simply not active (fail
+    # closed) rather than raising and taking down the whole catalog.
+    catalog = FPTCatalog.from_configuration(
+        model_catalog={"reasoning": "qwen3-benchmark-selected"},
+        environ={"FPT_API_KEY": "secret-key"},
+    )
+    assert dict(catalog.capabilities) == {}
+    with pytest.raises(ValueError):
+        catalog.config_for("reasoning")
+
+
+def test_partial_endpoint_configuration_fails_loudly() -> None:
+    # A half-configured route (URL but no id) is a real misconfiguration and
+    # must still fail loudly, not be silently skipped.
     with pytest.raises(ValueError, match="incomplete FPT reasoning"):
         FPTCatalog.from_configuration(
             model_catalog={"reasoning": "qwen3-benchmark-selected"},
-            environ={"FPT_API_KEY": "secret-key"},
+            environ={
+                "FPT_API_KEY": "secret-key",
+                "FPT_REASONING_ENDPOINT_URL": "https://fpt.example.com/v1/reasoning",
+            },
         )
 
 
