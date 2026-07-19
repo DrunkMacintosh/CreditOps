@@ -381,6 +381,11 @@ class RunWorkerOnce:
             # same bounded retry state as an explicit retry result.  If the
             # lease was lost, the stale-write exception above preserves the
             # redelivery instead of mutating a newer worker's task.
+            #
+            # The exception TYPE and message are carried in the durable reason
+            # and the run outcome: a bare "worker exception" made a live
+            # processor failure undiagnosable (2026-07-19).
+            failure_reason = f"worker exception: {type(exc).__name__}: {exc}"[:500]
             try:
                 task = await self._tasks.get(
                     message.envelope.task_id,
@@ -393,7 +398,7 @@ class RunWorkerOnce:
                         case_version=task.case_version,
                         document_version_id=task.document_version_id,
                         lease_token=lease_token,
-                        reason="worker exception",
+                        reason=failure_reason,
                         now=self._clock(),
                         base_delay_seconds=self._retry_base_delay_seconds,
                     )
@@ -405,7 +410,7 @@ class RunWorkerOnce:
                         else WorkerOutcome.FAILED_MANUAL_REVIEW,
                         task.id,
                         message.message_id,
-                        "worker exception",
+                        failure_reason,
                     )
             except (StaleTaskError, TaskLeaseLost):
                 pass
