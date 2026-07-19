@@ -74,27 +74,35 @@ jobs:
       # SUPABASE_SERVICE_ROLE_KEY is unset so the deploy never breaks; 409 means
       # the bucket already exists. Buckets are private (public:false), so the
       # browser only ever reaches them through a backend-created upload intent.
-      - name: Provision private Storage buckets (idempotent)
+      # BEST-EFFORT: never fails the deploy (a bucket hiccup must not block the
+      # API/worker/Vercel rollout). The key is whitespace-trimmed (a trailing
+      # newline from `gh secret set` is a common 400 cause) and the real Storage
+      # error body is surfaced as a warning. 409 = already exists = success. If
+      # this warns, create the three PRIVATE buckets in the Supabase dashboard.
+      - name: Provision private Storage buckets (best-effort, idempotent)
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          set -euo pipefail
-          if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
-            echo "SUPABASE_SERVICE_ROLE_KEY not set; skipping bucket provisioning (uploads stay disabled)."
+          set -uo pipefail
+          key="$(printf '%s' "${SUPABASE_SERVICE_ROLE_KEY:-}" | tr -d '[:space:]')"
+          if [ -z "$key" ]; then
+            echo "SUPABASE_SERVICE_ROLE_KEY not set; skipping bucket provisioning."
             exit 0
           fi
           base="https://${SUPABASE_PROJECT_REF}.supabase.co/storage/v1"
           for b in creditops-incoming creditops-originals creditops-derived; do
-            code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "${base}/bucket" \
-              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            resp="$(curl -s -w $'\n%{http_code}' -X POST "${base}/bucket" \
+              -H "Authorization: Bearer ${key}" -H "apikey: ${key}" \
               -H "Content-Type: application/json" \
               -d "{\"id\":\"${b}\",\"name\":\"${b}\",\"public\":false}")"
+            code="$(printf '%s' "$resp" | tail -n1)"
+            body="$(printf '%s' "$resp" | sed '$d')"
             case "$code" in
               200|201|409) echo "bucket ${b}: ok (${code})" ;;
-              *) echo "bucket ${b}: FAILED (HTTP ${code})" >&2; exit 1 ;;
+              *) echo "::warning::bucket ${b} create returned HTTP ${code}: ${body}" ;;
             esac
           done
+          exit 0
 
   cloud-run:
     name: Build and deploy Cloud Run
