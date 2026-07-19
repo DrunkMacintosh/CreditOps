@@ -4,9 +4,26 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from creditops.application.ports.storage import StorageError
+from creditops.application.ports.storage import StorageError, StorageObjectNotFound
 from creditops.config import Settings
 from creditops.infrastructure.supabase.storage import SupabaseStorage
+
+# The exact JSON body live Supabase Storage returns from ``GET /object/info``
+# (captured 2026-07-19, correlation c416bcf9): the object's true size and type
+# live in the body -- ``size`` and ``content_type`` -- never in the HTTP headers.
+_LIVE_INFO_BODY = {
+    "id": "06d29833-42b8-4ee1-b140-1af7b65cabf2",
+    "name": "incoming/case/intent",
+    "version": "992abe22-a7dc-4713-a6e0-fab9099de1ff",
+    "bucket_id": "creditops-incoming",
+    "size": 5,
+    "content_type": "application/pdf",
+    "cache_control": "no-cache",
+    "etag": '"5d41402abc4b2a76b9719d911017c592"',
+    "metadata": {},
+    "last_modified": "2026-07-19T01:27:29.403Z",
+    "created_at": "2026-07-19T01:27:29.403Z",
+}
 
 
 def settings() -> Settings:
@@ -168,5 +185,63 @@ async def test_service_root_relative_url_still_rejects_foreign_object() -> None:
             content_type="application/pdf",
             size_bytes=100,
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        )
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_head_object_reads_size_and_type_from_info_json_not_headers() -> None:
+    # Regression (live 502 STORAGE_VERIFICATION_FAILED, correlation c416bcf9):
+    # the adapter must GET ``/object/info`` and read the object's real size/type
+    # from the JSON body. A HEAD there would instead surface the metadata
+    # document's own ``content-length`` (363) and ``application/json`` header.
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        # ``json=`` sets the HTTP ``content-type: application/json`` header and a
+        # header ``content-length`` of the *document* -- both deliberately wrong
+        # for the object; the adapter must ignore them and trust the body.
+        return httpx.Response(200, json=_LIVE_INFO_BODY)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = SupabaseStorage(settings(), client=client)
+    metadata = await adapter.head_object(
+        bucket_id="creditops-incoming", object_key="incoming/case/intent"
+    )
+
+    assert requests[0].method == "GET"
+    assert "object/info/creditops-incoming" in str(requests[0].url)
+    assert metadata.size_bytes == 5
+    assert metadata.content_type == "application/pdf"
+    assert metadata.sha256 is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_head_object_missing_object_raises_not_found() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "not_found"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = SupabaseStorage(settings(), client=client)
+    with pytest.raises(StorageObjectNotFound):
+        await adapter.head_object(
+            bucket_id="creditops-incoming", object_key="incoming/case/intent"
+        )
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_head_object_without_a_size_fails_closed() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = {k: v for k, v in _LIVE_INFO_BODY.items() if k != "size"}
+        return httpx.Response(200, json=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = SupabaseStorage(settings(), client=client)
+    with pytest.raises(StorageError):
+        await adapter.head_object(
+            bucket_id="creditops-incoming", object_key="incoming/case/intent"
         )
     await client.aclose()

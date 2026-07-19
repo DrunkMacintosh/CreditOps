@@ -195,9 +195,15 @@ class SupabaseStorage(StoragePort):
         bucket_id: str,
         object_key: str,
     ) -> StorageObjectMetadata:
+        # ``/object/info`` is a JSON-body endpoint: it must be GET, not HEAD.
+        # A HEAD returns 200 but with the metadata document's own ``content-length``
+        # (e.g. 363) and ``content-type: application/json`` -- never the stored
+        # object's real size/type -- so the object's true ``size``/``content_type``
+        # live only in the GET response body (verified against live Supabase
+        # Storage 2026-07-19, correlation c416bcf9).
         client = await self._request_client()
         try:
-            response = await client.head(
+            response = await client.get(
                 self._object_url(bucket_id, object_key, info=True),
                 headers=self._admin_headers(),
             )
@@ -208,24 +214,59 @@ class SupabaseStorage(StoragePort):
         if response.status_code < 200 or response.status_code >= 300:
             raise StorageError("Storage metadata request was rejected")
         try:
-            size_bytes = int(response.headers.get("content-length", "-1"))
+            payload = response.json()
         except ValueError as exc:
-            raise StorageError("Storage object size was invalid") from exc
-        if size_bytes < 0:
-            raise StorageError("Storage object size was unavailable")
-        sha256 = self._sha256_header(response.headers)
+            raise StorageError("Storage metadata response was invalid") from exc
+        if not isinstance(payload, Mapping):
+            raise StorageError("Storage metadata response was invalid")
         return StorageObjectMetadata(
             bucket_id=bucket_id,
             object_key=object_key,
-            size_bytes=size_bytes,
-            content_type=response.headers.get("content-type"),
-            sha256=sha256,
+            size_bytes=self._object_size(payload),
+            content_type=self._object_content_type(payload),
+            sha256=self._object_sha256(payload),
         )
 
     @staticmethod
-    def _sha256_header(headers: Mapping[str, str]) -> str | None:
-        raw = headers.get("x-content-sha256") or headers.get("x-amz-meta-sha256")
-        if raw is None:
+    def _object_size(payload: Mapping[str, object]) -> int:
+        size = payload.get("size")
+        if size is None:
+            metadata = payload.get("metadata")
+            if isinstance(metadata, Mapping):
+                size = metadata.get("size")
+                if size is None:
+                    size = metadata.get("contentLength")
+        if isinstance(size, str) and size.isdigit():
+            size = int(size)
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise StorageError("Storage object size was unavailable")
+        return size
+
+    @staticmethod
+    def _object_content_type(payload: Mapping[str, object]) -> str | None:
+        content_type = (
+            payload.get("content_type")
+            or payload.get("contentType")
+            or payload.get("mimetype")
+        )
+        if content_type is None:
+            metadata = payload.get("metadata")
+            if isinstance(metadata, Mapping):
+                content_type = metadata.get("mimetype") or metadata.get("content_type")
+        if not isinstance(content_type, str):
+            return None
+        # Strip any charset parameter so the comparison against the intent's
+        # declared type stays on the bare media type.
+        bare = content_type.split(";", 1)[0].strip()
+        return bare or None
+
+    @staticmethod
+    def _object_sha256(payload: Mapping[str, object]) -> str | None:
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, Mapping):
+            return None
+        raw = metadata.get("sha256") or metadata.get("x-content-sha256")
+        if not isinstance(raw, str):
             return None
         value = raw.strip().lower()
         return (
