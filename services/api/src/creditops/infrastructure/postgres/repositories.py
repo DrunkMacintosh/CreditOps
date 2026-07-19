@@ -358,7 +358,7 @@ class PostgresUploadRepository:
              and assignment.officer_id = intent.assigned_officer_id
              and assignment.revoked_at is null
             where intent.id = %s and intent.assigned_officer_id = %s
-            for update
+            for update of intent
             """,
             (intent_id, actor_id),
         )
