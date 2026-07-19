@@ -366,6 +366,22 @@ def main(
                 governance=governance,
             )
         )
+        # Report the outcome of every execution.  Without this a NO_SLOT (the
+        # single worker slot is leased) and a NO_MESSAGE (the queue is empty)
+        # are indistinguishable -- both just compose the runtime and exit -- so
+        # a stuck pipeline cannot be told apart from an idle one.
+        log_event(
+            _logger,
+            logging.INFO,
+            "Worker execution finished",
+            {
+                "event": "worker_run_outcome",
+                "outcome": result.outcome.value,
+                "taskId": str(result.task_id) if result.task_id else None,
+                "messageId": result.message_id,
+                "reason": result.reason or None,
+            },
+        )
         if result.outcome in {
             WorkerOutcome.SUCCEEDED,
             WorkerOutcome.SUPERSEDED,

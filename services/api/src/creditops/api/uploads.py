@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID
@@ -30,6 +31,9 @@ from creditops.application.use_cases.create_upload_intent import (
 )
 from creditops.application.use_cases.enqueue_task import EnqueueTask, TaskEnqueueError
 from creditops.domain.tasks import TaskEnvelopeV1
+from creditops.observability import log_event
+
+_logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["uploads"])
 
@@ -126,6 +130,19 @@ async def _enqueue_registered_task(request: Request, result: RegisteredUpload) -
     queue = getattr(request.app.state, "task_queue", None)
     tasks = getattr(request.app.state, "task_repository", None)
     if queue is None or tasks is None:
+        # A registered task that is never published sits PENDING forever with
+        # no queue message.  This must be observable, not silent.
+        log_event(
+            _logger,
+            logging.ERROR,
+            "Registered upload was not enqueued: task queue is not configured",
+            {
+                "event": "upload_enqueue_skipped_no_queue",
+                "taskId": str(result.task_id),
+                "queueConfigured": queue is not None,
+                "taskRepositoryConfigured": tasks is not None,
+            },
+        )
         return
     task_repository = cast(TaskRepository, tasks)
     task = await task_repository.get(result.task_id)
@@ -137,7 +154,17 @@ async def _enqueue_registered_task(request: Request, result: RegisteredUpload) -
         case_version=task.case_version,
         document_version_id=task.document_version_id,
     )
-    await EnqueueTask(task_repository, cast(QueuePort, queue)).execute(envelope)
+    enqueued = await EnqueueTask(task_repository, cast(QueuePort, queue)).execute(envelope)
+    log_event(
+        _logger,
+        logging.INFO,
+        "Registered upload enqueued for document ingestion",
+        {
+            "event": "upload_task_enqueued",
+            "taskId": str(task.id),
+            "messageId": enqueued.message_id,
+        },
+    )
 
 
 def _require_intake(actor: ActorContext) -> None:
