@@ -60,6 +60,54 @@ def test_grounded_candidates_must_reference_a_parsed_region() -> None:
         validate_candidates([outside], parsed)
 
 
+def test_text_candidate_with_invented_coordinates_is_reanchored_by_value() -> None:
+    # Live regression (2026-07-19, task 9eace082): text-route models get no
+    # page geometry, so DeepSeek invented coordinates that overlapped nothing
+    # and the WHOLE extraction was rejected although its values were present
+    # verbatim.  A non-overlapping candidate whose value literally appears in
+    # a region is re-anchored to that region's true parser geometry --
+    # including across Vietnamese thousands formatting (2.500.000.000).
+    parsed = ParsedDocument(
+        document_version_id=uuid4(),
+        content_type="application/pdf",
+        extraction_method="test",
+        regions=(
+            ParsedRegion(
+                page=1, text="Số tiền đề nghị vay: 2.500.000.000 VND",
+                x=0, y=0.2, width=1, height=0.05,
+            ),
+        ),
+    )
+    invented = ExtractionCandidate(
+        field_key="requested_amount",
+        proposed_value=2500000000,
+        confidence=0.9,
+        page=3,          # model-invented page
+        x=0.5, y=0.5, width=0.1, height=0.1,
+    )
+    [anchored] = validate_candidates([invented], parsed)
+    assert anchored.page == 1
+    assert anchored.y == 0.2
+    assert anchored.height == 0.05
+
+
+def test_ungroundable_candidate_is_dropped_not_fatal() -> None:
+    parsed = _parsed()
+    grounded = ExtractionCandidate(
+        field_key="requested_amount", proposed_value="500000000",
+        confidence=0.9, page=2, x=0.5, y=0.5, width=0.1, height=0.1,
+    )
+    hallucinated = ExtractionCandidate(
+        field_key="collateral_value", proposed_value="999999999",
+        confidence=0.9, page=2, x=0.5, y=0.5, width=0.1, height=0.1,
+    )
+    survivors = validate_candidates([grounded, hallucinated], parsed)
+    assert [c.field_key for c in survivors] == ["requested_amount"]
+    # Nothing groundable at all -> the extraction is rejected as a whole.
+    with pytest.raises(ValueError, match="grounded"):
+        validate_candidates([hallucinated], parsed)
+
+
 class _Parser:
     def parse(self, document_version_id: object, document: SecureDocument) -> ParsedDocument:
         return ParsedDocument(
