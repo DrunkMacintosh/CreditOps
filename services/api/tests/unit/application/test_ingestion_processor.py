@@ -24,6 +24,7 @@ from creditops.application.ports.document_ingestion import (
     PersistableRegion,
 )
 from creditops.application.ports.model_gateway import (
+    InferenceNotProvisionedError,
     InferenceResult,
     InferenceUnavailableError,
 )
@@ -99,20 +100,24 @@ class FakeGateway:
         self,
         *,
         embed_unavailable: bool = False,
+        embed_not_provisioned: bool = False,
         extract_unavailable: bool = False,
     ) -> None:
         self._embed_unavailable = embed_unavailable
+        self._embed_not_provisioned = embed_not_provisioned
         self._extract_unavailable = extract_unavailable
         self.extract_calls = 0
         self.embed_calls = 0
 
-    async def extract_kie(self, request: Any) -> InferenceResult:
+    async def reason(self, request: Any) -> InferenceResult:
+        # Text extraction rides the benchmark-passed REASONING route (the KIE
+        # capability stays unpinned/fail-closed until its own benchmark).
         self.extract_calls += 1
         if self._extract_unavailable:
-            raise InferenceUnavailableError("FPT KIE endpoint unavailable")
+            raise InferenceUnavailableError("FPT reasoning endpoint unavailable")
         return _inference(
-            capability="kie",
-            model_id="kie-gated-v1",
+            capability="reasoning",
+            model_id="reasoning-benchmarked-v1",
             payload={
                 "candidates": [
                     {
@@ -131,6 +136,8 @@ class FakeGateway:
 
     async def embed(self, request: Any) -> InferenceResult:
         self.embed_calls += 1
+        if self._embed_not_provisioned:
+            raise InferenceNotProvisionedError("FPT capability is not configured: embedding")
         if self._embed_unavailable:
             raise InferenceUnavailableError("FPT embedding endpoint unavailable")
         return _inference(
@@ -464,6 +471,31 @@ async def test_embedding_unavailable_retries_without_faking_a_vector() -> None:
     # Partial processing must never reach the officer-review handoff.
     assert port.stage is not DocumentStage.READY_FOR_OFFICER_REVIEW
     assert port.stage is DocumentStage.EXTRACTED
+
+
+@pytest.mark.asyncio
+async def test_embedding_not_provisioned_advances_ready_with_audited_skip() -> None:
+    # An UNPROVISIONED embedding route is permanent for this deployment:
+    # retrying can never succeed, so the stage advances with ZERO persisted
+    # passages (nothing fabricated) and records the degradation in the
+    # INDEXED checkpoint. Extraction evidence (the officer-review core) is
+    # fully persisted and the document reaches READY.
+    port = FakePort()
+    gateway = FakeGateway(embed_not_provisioned=True)
+    recorder = CheckpointRecorder()
+    processor = _processor(port, gateway, FakeParser())
+
+    result = await processor.process(_task(), None, recorder)
+
+    assert result.status is WorkerOutcome.SUCCEEDED
+    assert len(port.candidates) == 1
+    assert port.passages == []
+    assert port.stage is DocumentStage.READY_FOR_OFFICER_REVIEW
+    indexed = next(
+        data for name, data in recorder.saved if name == "INDEXED"
+    )
+    assert indexed["passageCount"] == 0
+    assert "not configured" in str(indexed["embeddingSkipped"])
 
 
 @pytest.mark.asyncio

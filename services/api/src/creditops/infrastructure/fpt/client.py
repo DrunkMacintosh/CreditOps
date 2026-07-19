@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from creditops.application.ports.model_gateway import (
+    InferenceNotProvisionedError,
     InferenceUnavailableError,
     InferenceValidationError,
 )
@@ -59,7 +60,10 @@ class FPTClient:
         try:
             config = self.catalog.config_for(capability)
         except ValueError as exc:
-            raise InferenceUnavailableError(str(exc)) from exc
+            # A capability with no route in this deployment is PERMANENT until
+            # the deployment changes -- distinct from a transient outage, so
+            # callers can degrade explicitly instead of retrying forever.
+            raise InferenceNotProvisionedError(str(exc)) from exc
         if capability == "embedding":
             request_json = self._embedding_request(config, payload)
         else:

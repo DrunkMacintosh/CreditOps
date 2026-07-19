@@ -21,6 +21,16 @@ class InferenceError(RuntimeError):
     """Base class for failures calling or validating a provider response."""
 
 
+class InferenceNotProvisionedError(InferenceError):
+    """The capability has NO configured route in this deployment.
+
+    Permanent for the lifetime of the deployment configuration -- unlike a
+    transient :class:`InferenceUnavailableError`, retrying can never succeed
+    until the deployment itself changes, so stages may make an explicit,
+    audited degradation decision instead of retrying forever.
+    """
+
+
 class InferenceUnavailableError(InferenceError):
     """The configured managed endpoint could not be reached or is disabled."""
 

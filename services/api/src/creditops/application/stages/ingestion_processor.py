@@ -53,9 +53,10 @@ from creditops.application.ports.model_gateway import (
     EmbeddingRequest,
     InferenceError,
     InferenceGateway,
+    InferenceNotProvisionedError,
     InferenceResult,
     InferenceUnavailableError,
-    KIERequest,
+    ReasonRequest,
     TableRequest,
     VisionRequest,
 )
@@ -386,6 +387,7 @@ class DocumentIngestionProcessor:
 
         # -- index (FPT embeddings) -----------------------------------------
         if resume_rank < _rank(DocumentStage.INDEXED):
+            index_skipped_reason: str | None = None
             try:
                 passages = await self._index(
                     context=context,
@@ -394,6 +396,15 @@ class DocumentIngestionProcessor:
                     region_rows=region_rows,
                     correlation_id=correlation_id,
                 )
+            except InferenceNotProvisionedError as exc:
+                # The embedding capability has NO route in this deployment --
+                # retrying can never succeed.  Advance WITHOUT passages and
+                # record the degradation explicitly in the checkpoint: nothing
+                # is fabricated (zero passage rows are persisted), semantic
+                # search over this document simply stays unavailable until an
+                # embedding route is provisioned and benchmark-passed.
+                passages = []
+                index_skipped_reason = str(exc)
             except InferenceUnavailableError as exc:
                 # Never fabricate an embedding: pause for a bounded retry instead.
                 return StageResult(
@@ -412,7 +423,10 @@ class DocumentIngestionProcessor:
                 from_stage=DocumentStage.EXTRACTED,
                 to_stage=DocumentStage.INDEXED,
             )
-            await save_checkpoint(CHECKPOINT_INDEXED, {"passageCount": len(passages)})
+            checkpoint_data: dict[str, object] = {"passageCount": len(passages)}
+            if index_skipped_reason is not None:
+                checkpoint_data["embeddingSkipped"] = index_skipped_reason
+            await save_checkpoint(CHECKPOINT_INDEXED, checkpoint_data)
 
         return None
 
@@ -544,14 +558,25 @@ class DocumentIngestionProcessor:
                 )
             )
         else:
-            method = "fpt-kie"
-            response = await self._gateway.extract_kie(
-                KIERequest(
+            # Text documents route through the REASONING capability -- the only
+            # route with a committed benchmark-pass record (DeepSeek-V4-Flash,
+            # intake-prompt-v1/intake-schema-v1, 14/14 synthetic holdout).  The
+            # dedicated KIE capability stays unpinned/fail-closed until its own
+            # reviewed benchmark exists; routing text extraction to it made
+            # every pdf/docx ingestion fail with "capability is not configured"
+            # (live 2026-07-19).
+            method = "fpt-reasoning"
+            response = await self._gateway.reason(
+                ReasonRequest(
                     correlation_id=correlation_id,
                     case_id=context.case_id,
                     document_version_id=document_version_id,
                     content=source_text,
-                    document_family=classification.family,
+                    system_context=(
+                        f"Nhóm tài liệu: {classification.family}. "
+                        "Trích xuất các trường thông tin đúng theo schema đã cho; "
+                        "không tính toán, không quyết định."
+                    ),
                     response_schema=schema,
                 )
             )
