@@ -82,6 +82,20 @@ async def test_queue_reads_message_from_pgmq_vt_then_message_order() -> None:
 
 
 @pytest.mark.asyncio
+async def test_extend_visibility_sends_relative_seconds_offset_with_casts() -> None:
+    # Regression (live 2026-07-19, tasks c5b03bec/a9a6f3d1): live pgmq's
+    # set_vt is (queue_name text, msg_id bigint, vt integer) where vt is a
+    # RELATIVE SECONDS OFFSET.  Sending an absolute timestamptz raised
+    # UndefinedFunction on every heartbeat, failing every claimed task before
+    # its processor ran.
+    connection = Connection([(True,)])
+    queue = SupabaseQueue(connection)
+    await queue.extend_visibility(7, visibility_timeout_seconds=300)
+    assert "pgmq.set_vt(%s::text, %s::bigint, %s::integer)" in connection.queries[0]
+    assert connection.params[0] == ("creditops_document_tasks", 7, 300)
+
+
+@pytest.mark.asyncio
 async def test_queue_rejects_malformed_message_and_bounds_visibility() -> None:
     connection = Connection([(42, 1, NOW, NOW, {"task_id": "not-a-uuid"})])
     queue = SupabaseQueue(connection)
