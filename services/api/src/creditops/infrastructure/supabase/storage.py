@@ -212,6 +212,13 @@ class SupabaseStorage(StoragePort):
         if response.status_code in (404, 410):
             raise StorageObjectNotFound("Storage object was not found")
         if response.status_code < 200 or response.status_code >= 300:
+            # Supabase Storage signals a missing object with HTTP 400 and a body
+            # of {"statusCode":"404","error":"not_found",...} rather than a bare
+            # 404 (verified live 2026-07-19, correlation c416bcf9). Treat that as
+            # "not found" so the immutable-destination existence probe in
+            # copy_immutable proceeds to copy instead of surfacing a spurious 502.
+            if self._is_not_found_response(response):
+                raise StorageObjectNotFound("Storage object was not found")
             raise StorageError("Storage metadata request was rejected")
         try:
             payload = response.json()
@@ -226,6 +233,22 @@ class SupabaseStorage(StoragePort):
             content_type=self._object_content_type(payload),
             sha256=self._object_sha256(payload),
         )
+
+    @staticmethod
+    def _is_not_found_response(response: httpx.Response) -> bool:
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        if not isinstance(body, Mapping):
+            return False
+        if str(body.get("statusCode")) == "404":
+            return True
+        error = str(body.get("error", "")).strip().lower()
+        if error in {"not_found", "not found"}:
+            return True
+        message = str(body.get("message", "")).strip().lower()
+        return "not found" in message
 
     @staticmethod
     def _object_size(payload: Mapping[str, object]) -> int:

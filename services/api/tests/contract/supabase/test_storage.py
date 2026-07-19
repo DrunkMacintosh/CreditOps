@@ -245,3 +245,85 @@ async def test_head_object_without_a_size_fails_closed() -> None:
             bucket_id="creditops-incoming", object_key="incoming/case/intent"
         )
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_head_object_maps_supabase_http400_not_found_to_object_not_found() -> None:
+    # Live behaviour (2026-07-19, correlation c416bcf9): a MISSING object returns
+    # HTTP 400 with a body of {"statusCode":"404","error":"not_found",...}, NOT a
+    # bare 404. head_object must surface StorageObjectNotFound so the immutable-
+    # destination existence probe can proceed to copy instead of raising 502.
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"statusCode": "404", "error": "not_found", "message": "Object not found"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = SupabaseStorage(settings(), client=client)
+    with pytest.raises(StorageObjectNotFound):
+        await adapter.head_object(
+            bucket_id="creditops-originals", object_key="originals/case/intent"
+        )
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_head_object_real_http400_error_still_raises_storage_error() -> None:
+    # A genuine rejection (no not-found marker) must NOT be masked as not-found.
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "InvalidRequest", "message": "bad range"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = SupabaseStorage(settings(), client=client)
+    with pytest.raises(StorageError):
+        await adapter.head_object(
+            bucket_id="creditops-originals", object_key="originals/case/intent"
+        )
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_copy_immutable_completes_when_destination_is_absent() -> None:
+    # End-to-end regression for the live 502: the destination does not exist yet,
+    # so the pre-copy existence probe hits HTTP 400/not_found; the copy must then
+    # proceed, and the post-copy verify must pass.  ``hello`` -> known sha256.
+    sha_hello = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    state = {"copied": False}
+    dest_info = {
+        "name": "originals/case/intent",
+        "bucket_id": "creditops-originals",
+        "size": 5,
+        "content_type": "application/pdf",
+        "metadata": {},
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/object/copy"):
+            state["copied"] = True
+            return httpx.Response(200, json={"Key": "creditops-originals/originals/case/intent"})
+        if "/object/info/" in path:  # existence / verify probe
+            if state["copied"]:
+                return httpx.Response(200, json=dest_info)
+            return httpx.Response(
+                400,
+                json={"statusCode": "404", "error": "not_found", "message": "Object not found"},
+            )
+        # object download stream for the checksum verify
+        return httpx.Response(200, content=b"hello")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = SupabaseStorage(settings(), client=client)
+    # Must not raise -- this is exactly the path that produced the live 502.
+    await adapter.copy_immutable(
+        source_bucket="creditops-incoming",
+        source_key="incoming/case/intent",
+        destination_bucket="creditops-originals",
+        destination_key="originals/case/intent",
+        content_type="application/pdf",
+        size_bytes=5,
+        content_sha256=sha_hello,
+    )
+    assert state["copied"] is True
+    await client.aclose()
